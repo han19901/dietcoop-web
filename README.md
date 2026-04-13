@@ -123,16 +123,3 @@ firebase deploy --only hosting
 - Otomatik pasifleştirme için Cloud Function kurulması önerilir
 - Mobil uygulama senkronizasyonu için Cloud Function kullanılabilir
 
-
-
-
-
-
-
-
-
-
-
-
-
-
