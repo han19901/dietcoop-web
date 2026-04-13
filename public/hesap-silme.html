@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DietCoop - Hesap Silme</title>
+    <meta name="description" content="DietCoop uygulamasından hesabınızı nasıl silebileceğinizi öğrenin. Hesap silme işlemi, silinen veriler ve korunan veriler hakkında bilgi edinin.">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: white;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #10b981;
+            margin-bottom: 30px;
+            border-bottom: 3px solid #10b981;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #059669;
+            margin-top: 30px;
+            margin-bottom: 15px;
+        }
+        h3 {
+            color: #047857;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background-color: #f9fafb;
+            border-left: 4px solid #10b981;
+        }
+        ol, ul {
+            margin-left: 20px;
+            margin-bottom: 15px;
+        }
+        li {
+            margin-bottom: 8px;
+        }
+        .warning {
+            background-color: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        .info {
+            background-color: #dbeafe;
+            border-left: 4px solid #3b82f6;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        .contact {
+            background-color: #f3f4f6;
+            padding: 20px;
+            border-radius: 5px;
+            margin-top: 30px;
+        }
+        a {
+            color: #10b981;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo h1 {
+            border: none;
+            margin-bottom: 10px;
+        }
+        .step-number {
+            display: inline-block;
+            background-color: #10b981;
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 30px;
+            margin-right: 10px;
+            font-weight: bold;
+        }
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+            h1 {
+                font-size: 24px;
+            }
+            h2 {
+                font-size: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <h1>DietCoop</h1>
+            <p>Hesap Silme</p>
+        </div>
+
+        <div class="section">
+            <h2>Hesabınızı Silmek İçin</h2>
+            <p>DietCoop uygulamasından hesabınızı silmek için aşağıdaki yöntemlerden birini kullanabilirsiniz:</p>
+            
+            <h3>1. Uygulama İçinden Silme (Önerilen)</h3>
+            <ol>
+                <li>DietCoop mobil uygulamasını açın</li>
+                <li>Profil sayfanıza gidin</li>
+                <li>"Hesabımı Sonlandır" butonuna tıklayın</li>
+                <li>Onay dialog'unu kabul edin</li>
+                <li>Hesap silme isteğiniz 24 saat sonra otomatik olarak işleme alınacaktır</li>
+                <li>24 saat içinde "Silme İsteğini İptal Et" butonuna tıklayarak iptal edebilirsiniz</li>
+            </ol>
+
+            <h3>2. E-posta ile Silme</h3>
+            <p>Hesap silme talebinizi <a href="mailto:destek@dietcoop.com">destek@dietcoop.com</a> adresine e-posta göndererek de yapabilirsiniz:</p>
+            <ul>
+                <li>E-postanızda kullanıcı adınızı (e-posta adresinizi) belirtin</li>
+                <li>Hesap silme talebinizi açıkça belirtin</li>
+                <li>Talebiniz 7 iş günü içinde işleme alınacaktır</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>Silinen Veriler</h2>
+            <p>Hesabınız silindiğinde aşağıdaki veriler kalıcı olarak silinir:</p>
+
+            <h3>Diyetisyen Hesapları için:</h3>
+            <ul>
+                <li>Kişisel bilgileriniz (ad, soyad, e-posta, telefon, adres)</li>
+                <li>Profil fotoğrafınız</li>
+                <li>Diyet planlarınız</li>
+                <li>Eşleşme kayıtlarınız</li>
+                <li>Bildirimleriniz</li>
+                <li>Öğün şablonlarınız</li>
+                <li>Firebase Authentication hesabınız</li>
+            </ul>
+
+            <h3>Danışan Hesapları için:</h3>
+            <ul>
+                <li>Kişisel bilgileriniz (ad, soyad, e-posta, telefon, adres)</li>
+                <li>Profil fotoğrafınız</li>
+                <li>Sağlık bilgileriniz (boy, kilo, sağlık durumları)</li>
+                <li>Diyet planlarınız (soft delete - finansal raporlar için saklanır)</li>
+                <li>Eşleşme kayıtlarınız</li>
+                <li>Bildirimleriniz</li>
+                <li>Firebase Authentication hesabınız</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>Korunan Veriler</h2>
+            <div class="info">
+                <p><strong>Önemli:</strong> Aşağıdaki veriler yasal zorunluluklar ve finansal raporlama gereksinimleri nedeniyle saklanır:</p>
+            </div>
+
+            <h3>Diyetisyen Hesapları için:</h3>
+            <ul>
+                <li><strong>Sonuç kartları (diet plan results)</strong> - Danışanların erişimi için korunur
+                    <ul>
+                        <li>Diyetisyen bilgileri anonimleştirilir: "Silinmiş Diyetisyen" olarak işaretlenir</li>
+                        <li>Diyetisyen erişimi kapatılır, ancak danışanlar sonuç kartlarını görebilir</li>
+                    </ul>
+                </li>
+                <li><strong>WebDietCoop'a gönderilen finansal rapor verileri</strong> - Silinmiş olarak işaretlenir ancak finansal raporlar için saklanır</li>
+            </ul>
+
+            <h3>Danışan Hesapları için:</h3>
+            <ul>
+                <li><strong>DiyetDeposu'ndaki geçmiş siparişler</strong> - Finansal raporlar için korunur</li>
+                <li><strong>Sonuç kartları</strong> - Diyetisyenlerin erişimi için korunur
+                    <ul>
+                        <li>Danışan bilgileri anonimleştirilir: "Silinmiş Danışan" olarak işaretlenir</li>
+                        <li>Danışan erişimi kapatılır, ancak diyetisyenler sonuç kartlarını görebilir</li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>Veri Saklama Süreleri</h2>
+            <ul>
+                <li>Silinen hesapların verileri <strong>90 gün içinde</strong> tamamen silinir (yasal zorunluluklar hariç)</li>
+                <li>Finansal raporlama için gerekli veriler yasal zorunluluklar gereği saklanır</li>
+                <li>Sonuç kartları, ilgili diyetisyen ve danışan her ikisi de hesap silene kadar saklanır</li>
+                <li>Her iki taraf da hesap silerse, sonuç kartları da silinir</li>
+            </ul>
+        </div>
+
+        <div class="warning">
+            <h3>⚠️ Önemli Uyarı</h3>
+            <p>Hesap silme işlemi <strong>geri alınamaz</strong>. Hesabınızı silmeden önce tüm önemli verilerinizi yedeklediğinizden emin olun.</p>
+        </div>
+
+        <div class="contact">
+            <h2>İletişim</h2>
+            <p>Hesap silme işlemi hakkında sorularınız için:</p>
+            <ul>
+                <li><strong>E-posta:</strong> <a href="mailto:destek@dietcoop.com">destek@dietcoop.com</a></li>
+                <li><strong>Web:</strong> <a href="https://www.dietcoop.com/destek">https://www.dietcoop.com/destek</a></li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>Gizlilik Politikası</h2>
+            <p>Hesap silme işlemi hakkında daha fazla bilgi için:</p>
+            <ul>
+                <li><a href="https://www.dietcoop.com/PrivacyPolicy_Client_TR.html" target="_blank">Danışan Gizlilik Politikası</a></li>
+                <li><a href="https://www.dietcoop.com/PrivacyPolicy_Dietitian_TR.html" target="_blank">Diyetisyen Gizlilik Politikası</a></li>
+            </ul>
+        </div>
+
+        <div style="text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 14px;">
+            <p>&copy; 2024 DietCoop. Tüm hakları saklıdır.</p>
+        </div>
+    </div>
+</body>
+</html>
+
+
+
+
+

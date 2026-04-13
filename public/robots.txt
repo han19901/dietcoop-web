@@ -1,0 +1,23 @@
+# robots.txt for DietCoop
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /diyetisyen/
+Disallow: /login
+Disallow: /hesap-silme
+
+# Sitemap
+Sitemap: https://www.dietcoop.com/sitemap.xml
+
+# Crawl-delay (optional, be nice to servers)
+Crawl-delay: 1
+
+# Allow specific bots
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: Slurp
+Allow: /

@@ -1,0 +1,8 @@
+{
+  "collectionGroup": "stratejikPartnerGiris",
+  "queryScope": "COLLECTION",
+  "fields": [
+    { "fieldPath": "email", "order": "ASCENDING" },
+    { "fieldPath": "aktif", "order": "ASCENDING" }
+  ]
+}

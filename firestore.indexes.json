@@ -1,0 +1,241 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "eslesmeler",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "diyetisyenId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "durum",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "olusturmaTarihi",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "odemeler",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "diyetisyenId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "olusturmaTarihi",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "faturalar",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "diyetisyenId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "olusturmaTarihi",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "faturalar",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "faturaDonemi.yil",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "faturaDonemi.ay",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "olusturmaTarihi",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "faturalar",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "faturaDurumu",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "olusturmaTarihi",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "faturalar",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "diyetisyenId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "faturaDonemi.yil",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "faturaDonemi.ay",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "mesajlar",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "diyetisyenId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "olusturmaTarihi",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "evraklar",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "diyetisyenId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "yuklemeTarihi",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "evraklar",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "evrakTipi",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "yuklemeTarihi",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "evraklar",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "durum",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "yuklemeTarihi",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "evraklar",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "diyetisyenId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "evrakTipi",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "yuklemeTarihi",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "bildirimler",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "diyetisyenId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "durum",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "olusturmaTarihi",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "bildirimler",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "diyetisyenId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "goruldu",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "durum",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "ilanlar",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "aktif",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "basvuruBaslangicTarihi",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "basvuruBitisTarihi",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,44 @@
+// Bu kuralları firestore.rules dosyanıza ekleyin (basvurular match'inden ÖNCE)
+
+// Stratejik Partner - Giriş yetkisi
+match /stratejikPartnerGiris/{docId} {
+  allow read: if isAdmin() || (request.auth != null && resource.data.email == request.auth.token.email);
+  allow write: if isAdmin();
+}
+
+match /stratejikPartnerFirmalar/{docId} {
+  allow read: if isAdmin() || (request.auth != null);
+  allow write: if isAdmin();
+}
+match /stratejikPartnerGorusmeler/{docId} {
+  allow read: if isAdmin() || (request.auth != null);
+  allow write: if isAdmin();
+}
+match /stratejikPartnerRandevular/{docId} {
+  allow read: if isAdmin() || (request.auth != null);
+  allow write: if isAdmin();
+}
+match /stratejikPartnerZiyaretler/{docId} {
+  allow read: if isAdmin() || (request.auth != null);
+  allow write: if isAdmin();
+}
+match /stratejikPartnerSatislar/{docId} {
+  allow read: if isAdmin() || (request.auth != null);
+  allow write: if isAdmin();
+}
+match /stratejikPartnerCirolar/{docId} {
+  allow read: if isAdmin() || (request.auth != null);
+  allow write: if isAdmin();
+}
+match /stratejikPartnerLoglar/{docId} {
+  allow read: if isAdmin() || (request.auth != null);
+  allow write: if isAdmin();
+}
+match /stratejikPartnerOdemeler/{docId} {
+  allow read: if isAdmin() || (request.auth != null);
+  allow write: if isAdmin();
+}
+match /stratejikPartnerAyarlar/{docId} {
+  allow read: if isAdmin() || (request.auth != null);
+  allow write: if isAdmin();
+}

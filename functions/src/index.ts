@@ -1,0 +1,1510 @@
+import * as functions from "firebase-functions";
+import * as admin from "firebase-admin";
+import * as path from "path";
+import * as express from "express";
+
+// Firebase Admin'i başlat (Web Panel projesi - webdietcoop)
+admin.initializeApp();
+
+// Mobil uygulama Firebase projesine erişim (dietcoop-432fa)
+// Web Panel'in Mobil App'i okuması ve yazması için mobile-app-service-account.json kullanılır
+const mobileAppServiceAccount = require(path.join(__dirname, "../mobile-app-service-account.json"));
+admin.initializeApp({
+  credential: admin.credential.cert(mobileAppServiceAccount),
+  databaseURL: "https://dietcoop-432fa.firebaseio.com",
+}, "mobileApp");
+
+const mobileAppDb = admin.app("mobileApp").firestore();
+const webPanelDb = admin.firestore();
+
+// Üye numarası oluşturma fonksiyonu
+async function generateUniqueUyeNumarasi(): Promise<string> {
+  const prefix = "DC";
+  let uyeNumarasi: string = "";
+  let exists = true;
+  
+  // Benzersiz bir üye numarası bulana kadar dene
+  while (exists) {
+    // 6 haneli rastgele sayı oluştur
+    const randomNum = Math.floor(100000 + Math.random() * 900000);
+    uyeNumarasi = `${prefix}${randomNum}`;
+    
+    // Bu üye numarası zaten var mı kontrol et
+    const snapshot = await webPanelDb.collection("diyetisyenler")
+      .where("uyeNumarasi", "==", uyeNumarasi)
+      .limit(1)
+      .get();
+    
+    exists = !snapshot.empty;
+  }
+  
+  return uyeNumarasi;
+}
+
+// CORS ayarları - DietCoop domain'lerine izin ver
+const corsOptions = {
+  origin: [
+    "https://www.dietcoop.com",
+    "https://dietcoop.com",
+    "http://localhost:5173",
+    "http://localhost:3000",
+    /\.dietcoop\.com$/, // Tüm dietcoop.com subdomain'leri
+  ],
+  credentials: true,
+  methods: ["GET", "POST", "OPTIONS", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  optionsSuccessStatus: 204,
+  preflightContinue: false,
+};
+
+// CORS helper function - Origin kontrolü
+function isOriginAllowed(origin: string | undefined, allowedOrigins: any): boolean {
+  if (!origin) return false;
+  
+  if (Array.isArray(allowedOrigins)) {
+    return allowedOrigins.some((allowedOrigin) => {
+      if (typeof allowedOrigin === "string") {
+        return allowedOrigin === origin;
+      } else if (allowedOrigin instanceof RegExp) {
+        return allowedOrigin.test(origin);
+      }
+      return false;
+    });
+  } else if (allowedOrigins === true) {
+    return true;
+  }
+  return false;
+}
+
+// CORS headers'ı set et
+function setCorsHeaders(req: express.Request, res: express.Response): void {
+  const origin = req.headers.origin;
+  
+  // OPTIONS (preflight) isteği için her zaman origin'e izin ver
+  if (req.method === "OPTIONS") {
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    } else {
+      // Origin yoksa bile header'ları set et
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    }
+    res.setHeader("Access-Control-Allow-Methods", corsOptions.methods.join(", "));
+    res.setHeader("Access-Control-Allow-Headers", corsOptions.allowedHeaders.join(", "));
+    res.setHeader("Access-Control-Max-Age", "3600");
+    return;
+  }
+  
+  // Normal istekler için origin kontrolü yap
+  if (origin) {
+    if (isOriginAllowed(origin, corsOptions.origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    } else {
+      // Origin izinli değilse bile header'ları set et (bazı tarayıcılar için)
+      res.setHeader("Access-Control-Allow-Origin", origin);
+    }
+  }
+  
+  // Her zaman bu header'ları set et
+  res.setHeader("Access-Control-Allow-Methods", corsOptions.methods.join(", "));
+  res.setHeader("Access-Control-Allow-Headers", corsOptions.allowedHeaders.join(", "));
+  res.setHeader("Access-Control-Max-Age", "3600");
+}
+
+// CORS wrapper - Express app kullanarak (KESIN ÇALIŞAN YÖNTEM)
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const corsHandler = (
+  handler: (_req: express.Request, _res: express.Response) => Promise<void> | void
+) => {
+  // Her fonksiyon için ayrı Express app oluştur
+  const app = express();
+  
+  // OPTIONS (preflight) isteği için özel middleware - EN ÖNCE BU ÇALIŞMALI
+  app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const origin = req.headers.origin;
+    
+    // OPTIONS isteği ise hemen cevap ver
+    if (req.method === "OPTIONS") {
+      // CORS headers'ı set et
+      if (origin) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+      } else {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+      }
+      res.setHeader("Access-Control-Allow-Methods", corsOptions.methods.join(", "));
+      res.setHeader("Access-Control-Allow-Headers", corsOptions.allowedHeaders.join(", "));
+      res.setHeader("Access-Control-Max-Age", "3600");
+      res.status(corsOptions.optionsSuccessStatus || 204).end();
+      return;
+    }
+    
+    // CORS headers'ı her zaman set et
+    setCorsHeaders(req, res);
+    next();
+  });
+  
+  // Body parser
+  app.use(express.json());
+  
+  // Handler'ı route olarak ekle - TÜM İSTEKLER İÇİN
+  app.use(async (req: express.Request, res: express.Response) => {
+    const requestId = `${req.method}_${Date.now()}`;
+    console.log(`[${requestId}] İstek geldi:`, {
+      method: req.method,
+      url: req.url,
+      origin: req.headers.origin,
+      headers: Object.keys(req.headers),
+      timestamp: new Date().toISOString()
+    });
+    
+    // CORS headers'ı her response'a ekle
+    setCorsHeaders(req, res);
+    
+    try {
+      await handler(req, res);
+    } catch (error: any) {
+      console.error(`[${requestId}] Handler error:`, {
+        message: error.message,
+        stack: error.stack,
+        timestamp: new Date().toISOString()
+      });
+      if (!res.headersSent) {
+        res.status(500).json({ 
+          error: error.message || "Sunucu hatası",
+          requestId: requestId,
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+  });
+  
+  // Express app'i Firebase Functions'a bağla
+  return functions.https.onRequest(app);
+};
+
+/**
+ * Mobil uygulamadan diyetisyen bilgilerini oku
+ * HTTP endpoint olarak kullanılabilir
+ */
+export const getDiyetisyen = corsHandler(async (request: express.Request, response: express.Response) => {
+  try {
+    console.log("getDiyetisyen çağrıldı", {
+      method: request.method,
+      body: request.body,
+      query: request.query,
+      origin: request.headers.origin
+    });
+    
+    let diyetisyenId: string | undefined;
+    
+    if (request.method === "POST") {
+      const body = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
+      diyetisyenId = body?.diyetisyenId;
+    } else if (request.method === "GET") {
+      diyetisyenId = request.query.diyetisyenId as string;
+    }
+
+    console.log("Parametreler:", { diyetisyenId });
+
+    if (!diyetisyenId) {
+      const errorMsg = "diyetisyenId gerekli";
+      console.error(errorMsg, { diyetisyenId });
+      response.status(400).json({ error: errorMsg });
+      return;
+    }
+
+    // Mobil uygulama Firebase projesinden diyetisyen bilgilerini oku
+    const docRef = await mobileAppDb.collection("users").doc(diyetisyenId).get();
+
+    if (!docRef.exists) {
+      console.error("Diyetisyen bulunamadı:", diyetisyenId);
+      response.status(404).json({ error: "Diyetisyen bulunamadı" });
+      return;
+    }
+
+    const data = docRef.data();
+
+    // Debug: Mobil uygulamadan gelen veriyi logla
+    console.log("[getDiyetisyen] Mobil uygulamadan gelen veri:", {
+      id: docRef.id,
+      email: data?.email,
+      name: data?.name,
+      surname: data?.surname,
+      aktifDanisanSayisi: data?.aktifDanisanSayisi,
+      pasifDanisanSayisi: data?.pasifDanisanSayisi,
+      sonGuncelleme: data?.sonGuncelleme,
+      dataKeys: Object.keys(data || {}),
+      rawData: data
+    });
+
+    // Sadece gerekli alanları döndür
+    const result = {
+      id: docRef.id,
+      email: data?.email,
+      name: data?.name,
+      surname: data?.surname,
+      aktifDanisanSayisi: data?.aktifDanisanSayisi ?? 0,
+      pasifDanisanSayisi: data?.pasifDanisanSayisi ?? 0,
+      sonGuncelleme: data?.sonGuncelleme?.toDate?.() || null,
+    };
+
+    console.log("[getDiyetisyen] Döndürülen sonuç:", result);
+
+    response.status(200).json(result);
+  } catch (error: any) {
+    console.error("getDiyetisyen genel hatası:", error);
+    console.error("Hata stack:", error.stack);
+    if (!response.headersSent) {
+      response.status(500).json({ 
+        error: error.message || "Sunucu hatası",
+        details: error.toString(),
+        stack: error.stack
+      });
+    }
+  }
+});
+
+/**
+ * Mobil uygulamadan aktif danışan sayısını oku
+ */
+export const getAktifDanisanSayisi = corsHandler(async (request, response) => {
+  try {
+    let diyetisyenId: string | undefined;
+    
+    if (request.method === "POST") {
+      const body = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
+      diyetisyenId = body?.diyetisyenId;
+    } else if (request.method === "GET") {
+      diyetisyenId = request.query.diyetisyenId as string;
+    }
+
+    if (!diyetisyenId) {
+      response.status(400).json({ error: "diyetisyenId gerekli" });
+      return;
+    }
+
+    const docRef = await mobileAppDb.collection("users").doc(diyetisyenId).get();
+
+    if (!docRef.exists) {
+      response.status(404).json({ error: "Diyetisyen bulunamadı" });
+      return;
+    }
+
+    const data = docRef.data();
+    const aktifDanisanSayisi = data?.aktifDanisanSayisi || 0;
+
+    response.status(200).json({ aktifDanisanSayisi });
+  } catch (error: any) {
+    console.error("getAktifDanisanSayisi hatası:", error);
+    response.status(500).json({ error: error.message || "Sunucu hatası" });
+  }
+});
+
+/**
+ * Mobil uygulamadan ay içindeki diyet planlarını oku
+ */
+export const getDiyetPlanlariByAy = corsHandler(async (request: express.Request, response: express.Response) => {
+  try {
+    console.log("getDiyetPlanlariByAy çağrıldı", {
+      method: request.method,
+      body: request.body,
+      query: request.query
+    });
+
+    let diyetisyenId: string | undefined;
+    let baslangicTarihi: string | undefined;
+    let bitisTarihi: string | undefined;
+    
+    if (request.method === "POST") {
+      const body = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
+      diyetisyenId = body?.diyetisyenId;
+      baslangicTarihi = body?.baslangicTarihi;
+      bitisTarihi = body?.bitisTarihi;
+    } else if (request.method === "GET") {
+      diyetisyenId = request.query.diyetisyenId as string;
+      baslangicTarihi = request.query.baslangicTarihi as string;
+      bitisTarihi = request.query.bitisTarihi as string;
+    }
+
+    console.log("Parametreler:", { diyetisyenId, baslangicTarihi, bitisTarihi });
+
+    if (!diyetisyenId || !baslangicTarihi || !bitisTarihi) {
+      const errorMsg = "diyetisyenId, baslangicTarihi ve bitisTarihi gerekli";
+      console.error(errorMsg, { diyetisyenId, baslangicTarihi, bitisTarihi });
+      response.status(400).json({ error: errorMsg });
+      return;
+    }
+
+    let baslangic: Date;
+    let bitis: Date;
+    
+    try {
+      baslangic = new Date(baslangicTarihi);
+      bitis = new Date(bitisTarihi);
+      
+      if (isNaN(baslangic.getTime()) || isNaN(bitis.getTime())) {
+        throw new Error("Geçersiz tarih formatı");
+      }
+    } catch (dateError) {
+      console.error("Tarih dönüştürme hatası:", dateError);
+      response.status(400).json({ 
+        error: "Geçersiz tarih formatı", 
+        details: dateError instanceof Error ? dateError.message : String(dateError)
+      });
+      return;
+    }
+
+    console.log("Tarih aralığı:", { 
+      baslangic: baslangic.toISOString(), 
+      bitis: bitis.toISOString() 
+    });
+
+      // Mobil uygulamadan dietPlans collection'ını oku
+      try {
+        const dietPlansRef = mobileAppDb.collection("dietPlans");
+        const baslangicTimestamp = admin.firestore.Timestamp.fromDate(baslangic);
+        const bitisTimestamp = admin.firestore.Timestamp.fromDate(bitis);
+        
+        console.log("Firestore sorgusu başlatılıyor:", {
+          collection: "dietPlans",
+          dietitianId: diyetisyenId,
+          baslangicTimestamp: baslangicTimestamp.toDate().toISOString(),
+          bitisTimestamp: bitisTimestamp.toDate().toISOString()
+        });
+
+        // Index gerektirmeyen sorgu: Önce dietitianId ile filtrele, sonra memory'de tarih filtresi yap
+        // Bu yaklaşım daha fazla veri çeker ama index gerektirmez
+        let snapshot;
+        try {
+          // Önce composite index ile dene
+          snapshot = await dietPlansRef
+            .where("dietitianId", "==", diyetisyenId)
+            .where("createdAt", ">=", baslangicTimestamp)
+            .where("createdAt", "<=", bitisTimestamp)
+            .get();
+        } catch (indexError: any) {
+          // Index hatası varsa alternatif yöntem kullan
+          if (indexError.code === 9 || indexError.message?.includes("index")) {
+            console.warn("Composite index bulunamadı, alternatif sorgu kullanılıyor:", indexError.message);
+            
+            // Sadece dietitianId ile filtrele (bu index genelde otomatik oluşur)
+            const allPlans = await dietPlansRef
+              .where("dietitianId", "==", diyetisyenId)
+              .get();
+            
+            // Tarih filtresini memory'de yap
+            const filteredDocs = allPlans.docs.filter(doc => {
+              const planData = doc.data();
+              const createdAt = planData.createdAt || planData.created_at || planData.dateCreated;
+              
+              if (!createdAt) return false;
+              
+              let planDate: Date;
+              if (createdAt.toDate && typeof createdAt.toDate === "function") {
+                planDate = createdAt.toDate();
+              } else if (createdAt instanceof admin.firestore.Timestamp) {
+                planDate = createdAt.toDate();
+              } else if (createdAt instanceof Date) {
+                planDate = createdAt;
+              } else {
+                planDate = new Date(createdAt);
+              }
+              
+              return planDate >= baslangic && planDate <= bitis;
+            });
+            
+            // FilteredDocs'u QuerySnapshot benzeri bir yapıya çevir
+            snapshot = {
+              docs: filteredDocs,
+              empty: filteredDocs.length === 0,
+              size: filteredDocs.length
+            } as any;
+            
+            console.log(`Alternatif sorgu ile ${filteredDocs.length} plan bulundu`);
+          } else {
+            throw indexError;
+          }
+        }
+
+      console.log(`Toplam ${snapshot.docs.length} diyet planı bulundu`);
+
+      const planlar: Array<{
+        danisanId: string;
+        danisanAdi: string;
+        olusturmaTarihi: string;
+      }> = [];
+
+      // Danışan bilgilerini almak için users collection'ını oku
+      const danisanMap = new Map<string, string>();
+
+      for (const doc of snapshot.docs) {
+        try {
+          const planData = doc.data();
+          
+          // Daha kapsamlı clientId arama
+          const clientId = planData.clientId 
+            || planData.client?.id 
+            || planData.userId 
+            || planData.user?.id
+            || planData.client
+            || planData.user;
+          
+          console.log("Plan işleniyor:", {
+            docId: doc.id,
+            clientId: clientId,
+            planDataKeys: Object.keys(planData),
+            planDataSample: {
+              clientId: planData.clientId,
+              client: planData.client,
+              userId: planData.userId,
+              user: planData.user,
+              createdAt: planData.createdAt ? (planData.createdAt.toDate ? planData.createdAt.toDate().toISOString() : String(planData.createdAt)) : null
+            }
+          });
+          
+          // clientId yoksa planı atlama, "unknown" olarak işaretle
+          const finalClientId = clientId || `unknown_${doc.id}`;
+          
+          if (finalClientId && !finalClientId.startsWith("unknown_") && !danisanMap.has(finalClientId)) {
+            // Danışan bilgisini al
+            try {
+              const clientDoc = await mobileAppDb.collection("users").doc(finalClientId).get();
+              if (clientDoc.exists) {
+                const clientData = clientDoc.data();
+                const ad = clientData?.name || clientData?.firstName || "";
+                const soyad = clientData?.surname || clientData?.lastName || "";
+                const danisanAdi = `${ad} ${soyad}`.trim() || "Bilinmeyen Danışan";
+                danisanMap.set(finalClientId, danisanAdi);
+                console.log(`Danışan bilgisi alındı: ${finalClientId} -> ${danisanAdi}`);
+              } else {
+                danisanMap.set(finalClientId, "Bilinmeyen Danışan");
+                console.log(`Danışan bulunamadı: ${finalClientId}`);
+              }
+            } catch (error) {
+              console.error(`Danışan bilgisi alınamadı (${finalClientId}):`, error);
+              danisanMap.set(finalClientId, "Bilinmeyen Danışan");
+            }
+          } else if (finalClientId.startsWith("unknown_")) {
+            danisanMap.set(finalClientId, "Bilinmeyen Danışan");
+          }
+
+          const createdAt = planData.createdAt || planData.created_at || planData.dateCreated || planData.created;
+          if (createdAt) {
+            try {
+              let tarih: Date;
+              if (createdAt.toDate && typeof createdAt.toDate === "function") {
+                tarih = createdAt.toDate();
+              } else if (createdAt instanceof admin.firestore.Timestamp) {
+                tarih = createdAt.toDate();
+              } else if (createdAt instanceof Date) {
+                tarih = createdAt;
+              } else if (typeof createdAt === "string" || typeof createdAt === "number") {
+                tarih = new Date(createdAt);
+              } else {
+                throw new Error("Bilinmeyen tarih formatı");
+              }
+              
+              if (isNaN(tarih.getTime())) {
+                throw new Error("Geçersiz tarih değeri");
+              }
+
+              planlar.push({
+                danisanId: finalClientId,
+                danisanAdi: danisanMap.get(finalClientId) || "Bilinmeyen Danışan",
+                olusturmaTarihi: tarih.toISOString(),
+              });
+              
+              console.log(`Plan eklendi: ${finalClientId} - ${tarih.toISOString()}`);
+            } catch (dateError) {
+              console.error(`Tarih dönüştürme hatası (${finalClientId}):`, dateError, "createdAt:", createdAt);
+              // Tarih hatası olsa bile planı ekle (tarih olarak şu anki zamanı kullan)
+              planlar.push({
+                danisanId: finalClientId,
+                danisanAdi: danisanMap.get(finalClientId) || "Bilinmeyen Danışan",
+                olusturmaTarihi: new Date().toISOString(),
+              });
+            }
+          } else {
+            console.warn("createdAt bulunamadı, plan atlanıyor:", doc.id, "Plan data keys:", Object.keys(planData));
+          }
+        } catch (docError) {
+          console.error(`Plan işlenirken hata (${doc.id}):`, docError);
+        }
+      }
+      
+      console.log(`Toplam ${planlar.length} plan işlendi, ${danisanMap.size} benzersiz danışan bulundu`);
+
+      console.log(`Toplam ${planlar.length} plan işlendi`);
+      response.status(200).json({ planlar });
+    } catch (queryError: any) {
+      console.error("Firestore sorgu hatası:", queryError);
+      response.status(500).json({ 
+        error: "Firestore sorgu hatası", 
+        details: queryError.message || String(queryError),
+        stack: queryError.stack
+      });
+      return;
+    }
+  } catch (error: any) {
+    console.error("getDiyetPlanlariByAy genel hatası:", error);
+    console.error("Hata stack:", error.stack);
+    response.status(500).json({ 
+      error: error.message || "Sunucu hatası",
+      details: error.toString(),
+      stack: error.stack
+    });
+  }
+});
+
+/**
+ * Mobil uygulamadan pasif danışan sayısını oku
+ */
+export const getPasifDanisanSayisi = corsHandler(async (request, response) => {
+  try {
+    let diyetisyenId: string | undefined;
+    
+    if (request.method === "POST") {
+      const body = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
+      diyetisyenId = body?.diyetisyenId;
+    } else if (request.method === "GET") {
+      diyetisyenId = request.query.diyetisyenId as string;
+    }
+
+    if (!diyetisyenId) {
+      response.status(400).json({ error: "diyetisyenId gerekli" });
+      return;
+    }
+
+    const docRef = await mobileAppDb.collection("users").doc(diyetisyenId).get();
+
+    if (!docRef.exists) {
+      response.status(404).json({ error: "Diyetisyen bulunamadı" });
+      return;
+    }
+
+    const data = docRef.data();
+    const pasifDanisanSayisi = data?.pasifDanisanSayisi || 0;
+
+    // CORS artık corsHandler wrapper'ı tarafından handle ediliyor(response);
+    response.status(200).json({ pasifDanisanSayisi });
+  } catch (error: any) {
+    console.error("getPasifDanisanSayisi hatası:", error);
+    response.status(500).json({ error: error.message || "Sunucu hatası" });
+  }
+});
+
+/**
+ * Mobil uygulamadan diyetisyenin aktiflik durumunu oku
+ * Mobil uygulama bu function'ı çağırarak web panel'deki aktiflik durumunu öğrenir
+ */
+export const getDietitianStatus = corsHandler(async (request, response) => {
+  try {
+    let diyetisyenId: string | undefined;
+    
+    if (request.method === "POST") {
+      const body = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
+      diyetisyenId = body?.diyetisyenId;
+    } else if (request.method === "GET") {
+      diyetisyenId = request.query.diyetisyenId as string;
+    }
+
+    if (!diyetisyenId) {
+      response.status(400).json({ error: "diyetisyenId gerekli" });
+      return;
+    }
+
+    // Web Panel Firebase projesinden diyetisyen bilgilerini oku
+    const webPanelDb = admin.firestore();
+    const docRef = await webPanelDb.collection("diyetisyenler").doc(diyetisyenId).get();
+
+    if (!docRef.exists) {
+      response.status(404).json({ error: "Diyetisyen bulunamadı" });
+      return;
+    }
+
+    const data = docRef.data();
+    
+    // Aktiflik durumunu mobil uygulamanın beklediği formata çevir
+    // Web panel: 'aktif' | 'pasif' | 'askiyaAlindi'
+    // Mobil app: 'Aktif' | 'Pasif' | 'Askıya Alındı'
+    let aktiflikDurumu = "Aktif"; // Varsayılan
+    const webAktiflikDurumu = data?.aktiflikDurumu;
+    if (webAktiflikDurumu === "aktif") {
+      aktiflikDurumu = "Aktif";
+    } else if (webAktiflikDurumu === "pasif") {
+      aktiflikDurumu = "Pasif";
+    } else if (webAktiflikDurumu === "askiyaAlindi") {
+      aktiflikDurumu = "Askıya Alındı";
+    }
+
+    response.status(200).json({
+      aktiflikDurumu: aktiflikDurumu,
+    });
+  } catch (error: any) {
+    console.error("getDietitianStatus hatası:", error);
+    response.status(500).json({ error: error.message || "Sunucu hatası" });
+  }
+});
+
+/**
+ * Üye numarası oluşturma endpoint'i (HTTP)
+ * Frontend'den çağrılabilir - Mevcut diyetisyenler için üye numarası oluşturur
+ */
+export const generateUyeNumarasi = corsHandler(async (request: express.Request, response: express.Response) => {
+  const functionId = `generateUyeNumarasi_${Date.now()}`;
+  
+  try {
+    console.log(`[${functionId}] generateUyeNumarasi başladı`);
+    
+    const diyetisyenId = request.body?.diyetisyenId || request.query.diyetisyenId;
+    console.log(`[${functionId}] Request body/query:`, { 
+      body: request.body, 
+      query: request.query,
+      diyetisyenId 
+    });
+    
+    if (!diyetisyenId) {
+      console.error(`[${functionId}] diyetisyenId eksik`);
+      response.status(400).json({ 
+        error: "diyetisyenId gerekli",
+        functionId: functionId,
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
+
+    // Diyetisyeni kontrol et
+    console.log(`[${functionId}] Diyetisyen kontrol ediliyor:`, diyetisyenId);
+    const diyetisyenDoc = await webPanelDb.collection("diyetisyenler").doc(diyetisyenId).get();
+    
+    if (!diyetisyenDoc.exists) {
+      console.error(`[${functionId}] Diyetisyen bulunamadı:`, diyetisyenId);
+      response.status(404).json({ 
+        error: "Diyetisyen bulunamadı",
+        diyetisyenId: diyetisyenId,
+        functionId: functionId,
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
+
+    const diyetisyenData = diyetisyenDoc.data();
+    console.log(`[${functionId}] Diyetisyen verisi:`, {
+      id: diyetisyenDoc.id,
+      uyeNumarasi: diyetisyenData?.uyeNumarasi,
+      mobilUygulamadanKayit: diyetisyenData?.mobilUygulamadanKayit,
+      kayitYeri: diyetisyenData?.kayitYeri
+    });
+    
+    // Eğer zaten üye numarası varsa, onu döndür
+    if (diyetisyenData?.uyeNumarasi && diyetisyenData.uyeNumarasi.trim() !== "") {
+      console.log(`[${functionId}] ✅ Üye numarası zaten mevcut:`, diyetisyenData.uyeNumarasi);
+      response.status(200).json({ 
+        uyeNumarasi: diyetisyenData.uyeNumarasi, 
+        mevcut: true,
+        functionId: functionId,
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
+
+    // Üye numarası oluştur
+    console.log(`[${functionId}] Yeni üye numarası oluşturuluyor...`);
+    const uyeNumarasi = await generateUniqueUyeNumarasi();
+    console.log(`[${functionId}] ✅ Üye numarası oluşturuldu:`, uyeNumarasi);
+    
+    // Ayarları oku (varsayılan değerler için)
+    const ayarlarDoc = await webPanelDb.collection("ayarlar").doc("genelAyarlar").get();
+    const ayarlar = ayarlarDoc.exists ? ayarlarDoc.data() : null;
+    const varsayilanDanisanBasiUcret = ayarlar?.varsayilanDanisanBasiUcret || 199;
+    const varsayilanIskontoOrani = ayarlar?.varsayilanIskontoOrani || 0;
+    console.log(`[${functionId}] Ayarlar:`, {
+      varsayilanDanisanBasiUcret,
+      varsayilanIskontoOrani
+    });
+    
+    // Diyetisyeni güncelle - üye numarası ve eksik alanları doldur
+    const updateData: any = {
+      uyeNumarasi: uyeNumarasi,
+      sonGuncelleme: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    
+    // Mobil uygulamadan gelen diyetisyenler için varsayılan değerleri de ata
+    if (diyetisyenData?.mobilUygulamadanKayit || diyetisyenData?.kayitYeri === "mobil") {
+      console.log(`[${functionId}] Mobil uygulamadan kayıt - varsayılan değerler atanıyor`);
+      if (!diyetisyenData.danisanBasiUcret || diyetisyenData.danisanBasiUcret === 0) {
+        updateData.danisanBasiUcret = varsayilanDanisanBasiUcret;
+      }
+      if (diyetisyenData.iskontoOrani === undefined || diyetisyenData.iskontoOrani === null) {
+        updateData.iskontoOrani = varsayilanIskontoOrani;
+      }
+      if (!diyetisyenData.paketHakki && diyetisyenData.paketHakki !== 0) {
+        updateData.paketHakki = 0;
+      }
+      if (diyetisyenData.aktifDanisanSayisi === undefined || diyetisyenData.aktifDanisanSayisi === null) {
+        updateData.aktifDanisanSayisi = 0;
+      }
+    }
+    
+    console.log(`[${functionId}] Firestore güncelleme yapılıyor:`, updateData);
+    await webPanelDb.collection("diyetisyenler").doc(diyetisyenId).update(updateData);
+    console.log(`[${functionId}] ✅ Firestore güncelleme tamamlandı`);
+
+    console.log(`[${functionId}] ✅ Diyetisyen ${diyetisyenId} için üye numarası oluşturuldu: ${uyeNumarasi}`);
+    
+    response.status(200).json({ 
+      uyeNumarasi, 
+      olusturuldu: true,
+      functionId: functionId,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error(`[${functionId}] ❌ generateUyeNumarasi hatası:`, {
+      message: error.message,
+      stack: error.stack,
+      diyetisyenId: request.body?.diyetisyenId || request.query?.diyetisyenId,
+      timestamp: new Date().toISOString()
+    });
+    response.status(500).json({ 
+      error: error.message || "Sunucu hatası",
+      functionId: functionId,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * Mobil uygulamadan gelen diyetisyenler için üye numarası ve varsayılan değerler atama
+ * onCreate: Yeni kayıt geldiğinde çalışır
+ * onWrite: Mevcut kayıtlar için de çalışır (üye numarası eksikse oluşturur)
+ */
+export const processMobileAppDiyetisyen = functions.firestore
+  .document("diyetisyenler/{diyetisyenId}")
+  .onWrite(async (change, context) => {
+    const diyetisyenData = change.after.exists ? change.after.data() : null;
+    const diyetisyenId = context.params.diyetisyenId;
+
+    if (!diyetisyenData) {
+      return; // Silme işlemi
+    }
+
+    // Sadece mobil uygulamadan gelen kayıtlar için işlem yap
+    if (!diyetisyenData?.mobilUygulamadanKayit && diyetisyenData?.kayitYeri !== "mobil") {
+      console.log(`Diyetisyen ${diyetisyenId} mobil uygulamadan gelmedi, işlem atlandı`);
+      return;
+    }
+
+    // Üye numarası varsa ve diğer alanlar da doluysa, işlem yapma (sonsuz döngü önleme)
+    const beforeData = change.before.exists ? change.before.data() : null;
+    
+    // Onay durumu değişikliğini kontrol et (beklemede -> onaylandi)
+    const onayDurumuDegisti = beforeData && 
+                               beforeData.onayDurumu !== "onaylandi" && 
+                               diyetisyenData.onayDurumu === "onaylandi";
+    
+    if (beforeData && 
+        beforeData.uyeNumarasi && 
+        beforeData.uyeNumarasi.trim() !== "" &&
+        beforeData.danisanBasiUcret &&
+        beforeData.iskontoOrani !== undefined &&
+        !onayDurumuDegisti) {
+      // Sadece üye numarası eksikse güncelle
+      if (diyetisyenData.uyeNumarasi && diyetisyenData.uyeNumarasi.trim() !== "") {
+        console.log(`Diyetisyen ${diyetisyenId} zaten üye numarasına sahip, işlem atlandı`);
+        return;
+      }
+    }
+
+    try {
+      // Ayarları oku (varsayılan değerler için)
+      const ayarlarDoc = await webPanelDb.collection("ayarlar").doc("genelAyarlar").get();
+      const ayarlar = ayarlarDoc.exists ? ayarlarDoc.data() : null;
+      
+      const varsayilanDanisanBasiUcret = ayarlar?.varsayilanDanisanBasiUcret || 199;
+      const varsayilanIskontoOrani = ayarlar?.varsayilanIskontoOrani || 0;
+      const varsayilanDenemeSuresiGunSayisi = ayarlar?.varsayilanDenemeSuresiGunSayisi || 15;
+
+      // Üye numarası yoksa veya boşsa kesinlikle oluştur
+      let uyeNumarasi = diyetisyenData.uyeNumarasi;
+      if (!uyeNumarasi || uyeNumarasi.trim() === "" || uyeNumarasi === null || uyeNumarasi === undefined) {
+        uyeNumarasi = await generateUniqueUyeNumarasi();
+        console.log(`Diyetisyen ${diyetisyenId} için üye numarası oluşturuldu: ${uyeNumarasi}`);
+      }
+
+      // Güncelleme verileri
+      const updateData: any = {
+        uyeNumarasi: uyeNumarasi,
+        kayitYeri: "mobil",
+        mobilUygulamadanKayit: true,
+        sonGuncelleme: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      // Varsayılan değerler yoksa ata
+      if (!diyetisyenData.danisanBasiUcret || diyetisyenData.danisanBasiUcret === 0) {
+        updateData.danisanBasiUcret = varsayilanDanisanBasiUcret;
+      }
+      
+      if (diyetisyenData.iskontoOrani === undefined || diyetisyenData.iskontoOrani === null) {
+        updateData.iskontoOrani = varsayilanIskontoOrani;
+      }
+
+      if (!diyetisyenData.paketHakki || diyetisyenData.paketHakki === 0) {
+        updateData.paketHakki = 0; // Deneme süresinde paket hakkı yok
+      }
+
+      if (!diyetisyenData.aktifDanisanSayisi || diyetisyenData.aktifDanisanSayisi === undefined) {
+        updateData.aktifDanisanSayisi = 0;
+      }
+
+      if (!diyetisyenData.pasifDanisanSayisi || diyetisyenData.pasifDanisanSayisi === undefined) {
+        updateData.pasifDanisanSayisi = 0;
+      }
+
+      // Deneme süresi kontrolü ve başlatma
+      // 1. Eğer onay durumu "onaylandi" ise ve deneme süresi yoksa veya aktif değilse başlat
+      // 2. Eğer onay durumu "beklemede" ise deneme süresini başlatma
+      if (diyetisyenData.onayDurumu === "onaylandi") {
+        // Onaylandı - deneme süresi yoksa veya aktif değilse başlat
+        if (!diyetisyenData.denemeSuresi || !diyetisyenData.denemeSuresi.aktif) {
+          const now = new Date();
+          const bitisTarihi = new Date(now);
+          bitisTarihi.setDate(bitisTarihi.getDate() + varsayilanDenemeSuresiGunSayisi);
+          
+          updateData.denemeSuresi = {
+            aktif: true,
+            baslangicTarihi: admin.firestore.Timestamp.fromDate(now),
+            bitisTarihi: admin.firestore.Timestamp.fromDate(bitisTarihi),
+            gunSayisi: varsayilanDenemeSuresiGunSayisi,
+          };
+          updateData.odemeDurumu = "deneme";
+          console.log(`Diyetisyen ${diyetisyenId} onaylandı, deneme süresi başlatıldı: ${varsayilanDenemeSuresiGunSayisi} gün`);
+        }
+      } else if (diyetisyenData.onayDurumu !== "onaylandi") {
+        // Onaylanmamış - deneme süresini başlatma
+        if (!diyetisyenData.denemeSuresi) {
+          // Sadece yapıyı hazırla, aktif etme
+          updateData.denemeSuresi = {
+            aktif: false,
+            gunSayisi: varsayilanDenemeSuresiGunSayisi,
+          };
+        } else if (diyetisyenData.denemeSuresi.aktif) {
+          // Eğer aktif deneme süresi varsa, onaylanmadığı için pasif yap
+          updateData.denemeSuresi = {
+            ...diyetisyenData.denemeSuresi,
+            aktif: false,
+          };
+        }
+        // Ödeme durumu onaylanana kadar "beklemede" olmalı
+        if (!diyetisyenData.odemeDurumu || diyetisyenData.odemeDurumu === "deneme") {
+          updateData.odemeDurumu = "beklemede";
+        }
+        console.log(`Diyetisyen ${diyetisyenId} onaylanmadı, deneme süresi başlatılmadı`);
+      }
+
+      // API erişim durumu yoksa varsayılan değer ata
+      if (!diyetisyenData.apiErisimDurumu) {
+        updateData.apiErisimDurumu = "aktif";
+      }
+
+      // Aktiflik durumu yoksa varsayılan değer ata
+      if (!diyetisyenData.aktiflikDurumu) {
+        updateData.aktiflikDurumu = "aktif";
+      }
+
+      // Onay durumu yoksa varsayılan değer ata
+      if (!diyetisyenData.onayDurumu) {
+        updateData.onayDurumu = "beklemede";
+      }
+
+      // Güncellemeleri yap
+      await webPanelDb.collection("diyetisyenler").doc(diyetisyenId).update(updateData);
+      
+      console.log(`Diyetisyen ${diyetisyenId} için üye numarası ve varsayılan değerler atandı:`, {
+        uyeNumarasi,
+        danisanBasiUcret: updateData.danisanBasiUcret,
+        iskontoOrani: updateData.iskontoOrani,
+      });
+    } catch (error: any) {
+      console.error(`Diyetisyen ${diyetisyenId} için varsayılan değerler atanırken hata:`, error);
+      // Hata durumunda throw etme, log'la
+    }
+  });
+
+/**
+ * Web'ten kayıt olan diyetisyenler için üye numarası oluşturma
+ * onCreate: Yeni kayıt geldiğinde çalışır
+ * onWrite: Mevcut kayıtlar için de çalışır (üye numarası eksikse oluşturur)
+ */
+export const processWebDiyetisyen = functions.firestore
+  .document("diyetisyenler/{diyetisyenId}")
+  .onWrite(async (change, context) => {
+    const diyetisyenData = change.after.exists ? change.after.data() : null;
+    const diyetisyenId = context.params.diyetisyenId;
+
+    if (!diyetisyenData) {
+      return; // Silme işlemi
+    }
+
+    // Sadece web'ten kayıt olanlar için işlem yap
+    const isWebKayit = (diyetisyenData?.kayitYeri === "web" || diyetisyenData?.kayitYeri === undefined) && 
+                       !diyetisyenData?.mobilUygulamadanKayit;
+    
+    if (!isWebKayit) {
+      console.log(`Diyetisyen ${diyetisyenId} web'ten kayıt olmadı, işlem atlandı`);
+      return;
+    }
+
+    // Üye numarası zaten varsa ve doluysa, işlem yapma (sonsuz döngü önleme)
+    const beforeData = change.before.exists ? change.before.data() : null;
+    if (beforeData && 
+        beforeData.uyeNumarasi && 
+        beforeData.uyeNumarasi.trim() !== "") {
+      // Üye numarası zaten varsa işlem yapma
+      if (diyetisyenData.uyeNumarasi && diyetisyenData.uyeNumarasi.trim() !== "") {
+        console.log(`Diyetisyen ${diyetisyenId} zaten üye numarasına sahip, işlem atlandı`);
+        return;
+      }
+    }
+
+    // Üye numarası yoksa veya boşsa oluştur
+    if (!diyetisyenData.uyeNumarasi || 
+        diyetisyenData.uyeNumarasi.trim() === "" || 
+        diyetisyenData.uyeNumarasi === null || 
+        diyetisyenData.uyeNumarasi === undefined) {
+      try {
+        const uyeNumarasi = await generateUniqueUyeNumarasi();
+        console.log(`Diyetisyen ${diyetisyenId} (web kayıt) için üye numarası oluşturuldu: ${uyeNumarasi}`);
+        
+        // Üye numarasını güncelle
+        await webPanelDb.collection("diyetisyenler").doc(diyetisyenId).update({
+          uyeNumarasi: uyeNumarasi,
+          sonGuncelleme: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        
+        console.log(`Diyetisyen ${diyetisyenId} için üye numarası başarıyla atandı: ${uyeNumarasi}`);
+      } catch (error: any) {
+        console.error(`Diyetisyen ${diyetisyenId} için üye numarası oluşturulurken hata:`, error);
+        // Hata durumunda throw etme, log'la
+      }
+    }
+  });
+
+/**
+ * Faz 4: Web Panelden Mobil Uygulamaya Senkronizasyon
+ * Diyetisyen değiştiğinde mobil uygulamaya senkronize et
+ * 
+ * NOT: Mobil App service account gereklidir (mobile-app-service-account.json)
+ * Şimdilik kod hazır, service account eklendiğinde aktif olacak
+ */
+export const syncDiyetisyenToMobileApp = functions.firestore
+  .document("diyetisyenler/{diyetisyenId}")
+  .onWrite(async (change, context) => {
+    const diyetisyenData = change.after.exists ? change.after.data() : null;
+    const diyetisyenId = context.params.diyetisyenId;
+
+    // Kendi yazdığı kaydı tekrar senkronize etme (sonsuz döngü önleme)
+    if (diyetisyenData?.kayitYeri === "mobil" || diyetisyenData?.mobilUygulamadanKayit === true) {
+      console.log(`Diyetisyen ${diyetisyenId} mobil uygulamadan geldi, senkronizasyon atlandı`);
+      return;
+    }
+
+    try {
+      if (diyetisyenData) {
+        // Ad soyadı ayır
+        const adSoyad = diyetisyenData.adSoyad || "";
+        const nameParts = adSoyad.split(" ");
+        const name = nameParts[0] || "";
+        const surname = nameParts.slice(1).join(" ") || "";
+
+        // Aktiflik durumunu mobil uygulamanın beklediği formata çevir
+        // Web panel: 'aktif' | 'pasif' | 'askiyaAlindi'
+        // Mobil app: 'Aktif' | 'Pasif' | 'Askıya Alındı'
+        let aktiflikDurumu = "Aktif"; // Varsayılan
+        const webAktiflikDurumu = diyetisyenData.aktiflikDurumu;
+        if (webAktiflikDurumu === "aktif") {
+          aktiflikDurumu = "Aktif";
+        } else if (webAktiflikDurumu === "pasif") {
+          aktiflikDurumu = "Pasif";
+        } else if (webAktiflikDurumu === "askiyaAlindi") {
+          aktiflikDurumu = "Askıya Alındı";
+        }
+
+        const syncData: any = {
+          email: diyetisyenData.email,
+          name: name,
+          surname: surname,
+          phone: diyetisyenData.telefon || "",
+          role: "dietitian",
+          status: diyetisyenData.onayDurumu === "onaylandi" ? "approved" : "pending",
+          aktifDanisanSayisi: diyetisyenData.aktifDanisanSayisi || 0,
+          pasifDanisanSayisi: diyetisyenData.pasifDanisanSayisi || 0,
+          aktiflikDurumu: aktiflikDurumu, // Mobil uygulamanın beklediği format
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+
+        // Mobil uygulamaya yaz (mobile-app-service-account.json ile)
+        await mobileAppDb.collection("users")
+          .doc(diyetisyenId)
+          .set(syncData, { merge: true });
+
+        console.log(`Diyetisyen ${diyetisyenId} mobil uygulamaya senkronize edildi (aktiflikDurumu: ${aktiflikDurumu})`);
+      }
+    } catch (error: any) {
+      console.error("Senkronizasyon hatası:", error);
+      // Hata durumunda throw etme, log'la (sonsuz döngü önleme)
+    }
+  });
+
+/**
+ * Mevcut mobil uygulama kullanıcılarını web panel projesine senkronize et
+ * Bu endpoint bir kez çalıştırılmalı (one-time sync)
+ */
+export const syncExistingMobileAppUsers = corsHandler(async (request: express.Request, response: express.Response) => {
+  const functionId = `syncExistingMobileAppUsers_${Date.now()}`;
+  
+  try {
+    console.log(`[${functionId}] Mevcut mobil uygulama kullanıcılarını senkronize etme başladı`);
+    
+    // Mobil uygulamadan tüm diyetisyenleri al
+    const mobileAppUsers = await mobileAppDb.collection("users")
+      .where("role", "==", "dietitian")
+      .get();
+    
+    console.log(`[${functionId}] ${mobileAppUsers.size} diyetisyen bulundu`);
+    
+    const webPanelAuth = admin.auth();
+    let successCount = 0;
+    let errorCount = 0;
+    const errors: any[] = [];
+    
+    for (const userDoc of mobileAppUsers.docs) {
+      const userData = userDoc.data();
+      const uid = userDoc.id;
+      
+      try {
+        // Kullanıcı zaten var mı kontrol et
+        try {
+          await webPanelAuth.getUser(uid);
+          console.log(`[${functionId}] Kullanıcı zaten mevcut: ${uid}`);
+          successCount++;
+          continue;
+        } catch (error: any) {
+          if (error.code !== "auth/user-not-found") {
+            throw error;
+          }
+        }
+        
+        // Yeni kullanıcı oluştur
+        await webPanelAuth.createUser({
+          uid: uid,
+          email: userData.email || "",
+          displayName: `${userData.name || ""} ${userData.surname || ""}`.trim() || "",
+          emailVerified: false,
+        });
+        
+        console.log(`[${functionId}] ✅ Kullanıcı senkronize edildi: ${uid} (${userData.email})`);
+        successCount++;
+      } catch (error: any) {
+        console.error(`[${functionId}] ❌ Kullanıcı senkronize edilemedi: ${uid}`, error.message);
+        errorCount++;
+        errors.push({
+          uid: uid,
+          email: userData.email,
+          error: error.message,
+        });
+      }
+    }
+    
+    console.log(`[${functionId}] ✅ Senkronizasyon tamamlandı: ${successCount} başarılı, ${errorCount} hata`);
+    
+    response.status(200).json({ 
+      success: true,
+      message: "Senkronizasyon tamamlandı",
+      total: mobileAppUsers.size,
+      successCount: successCount,
+      errorCount: errorCount,
+      errors: errors,
+      functionId: functionId,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error(`[${functionId}] ❌ syncExistingMobileAppUsers hatası:`, {
+      message: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
+    });
+    response.status(500).json({ 
+      error: error.message || "Sunucu hatası",
+      functionId: functionId,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * Mobil uygulamadan şifre güncelleme
+ * Mobil uygulamada şifre değiştirildiğinde, web panel projesinde de şifreyi günceller
+ */
+export const updatePasswordFromMobileApp = corsHandler(async (request: express.Request, response: express.Response) => {
+  const functionId = `updatePasswordFromMobileApp_${Date.now()}`;
+  
+  try {
+    console.log(`[${functionId}] updatePasswordFromMobileApp başladı`);
+    
+    const body = request.body as any;
+    const { uid, email, password } = body;
+    
+    if (!uid || !email || !password) {
+      console.error(`[${functionId}] uid, email veya password eksik`);
+      response.status(400).json({ 
+        error: "uid, email ve password gerekli",
+        functionId: functionId,
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
+
+    console.log(`[${functionId}] Mobil uygulamadan şifre güncelleme:`, { uid, email });
+
+    // Web panel Firebase projesinde şifreyi güncelle
+    const webPanelAuth = admin.auth();
+    
+    try {
+      // Kullanıcı var mı kontrol et
+      try {
+        await webPanelAuth.getUser(uid);
+        // Kullanıcı varsa şifreyi güncelle
+        await webPanelAuth.updateUser(uid, {
+          password: password,
+        });
+        console.log(`[${functionId}] ✅ Şifre güncellendi: ${uid}`);
+      } catch (error: any) {
+        if (error.code === "auth/user-not-found") {
+          // Kullanıcı yoksa oluştur
+          console.log(`[${functionId}] Kullanıcı bulunamadı, yeni kullanıcı oluşturuluyor: ${uid}`);
+          await webPanelAuth.createUser({
+            uid: uid,
+            email: email,
+            password: password,
+            emailVerified: false,
+          });
+          console.log(`[${functionId}] ✅ Yeni kullanıcı oluşturuldu ve şifre ayarlandı: ${uid}`);
+        } else {
+          throw error;
+        }
+      }
+      
+      response.status(200).json({ 
+        success: true,
+        message: "Şifre başarıyla güncellendi",
+        uid: uid,
+        functionId: functionId,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      console.error(`[${functionId}] Şifre güncelleme hatası:`, {
+        message: error.message,
+        code: error.code,
+        uid: uid,
+        timestamp: new Date().toISOString()
+      });
+      
+      throw error;
+    }
+  } catch (error: any) {
+    console.error(`[${functionId}] ❌ updatePasswordFromMobileApp hatası:`, {
+      message: error.message,
+      stack: error.stack,
+      body: request.body,
+      timestamp: new Date().toISOString()
+    });
+    response.status(500).json({ 
+      error: error.message || "Sunucu hatası",
+      functionId: functionId,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * Mobil uygulamadan gelen Auth senkronizasyonu
+ * Mobil uygulamada yeni kullanıcı oluşturulduğunda, web panel projesinde de aynı kullanıcıyı oluşturur
+ * 
+ * NOT: Bu endpoint mobil uygulama tarafından çağrılmalı
+ * Mobil uygulama projesinde Auth onCreate trigger'ı bu endpoint'i çağırmalı
+ */
+/**
+ * Eksik üye numaraları olan tüm diyetisyenler için üye numarası oluşturma endpoint'i
+ * HTTP GET veya POST ile çağrılabilir
+ */
+export const generateAllMissingUyeNumarasi = corsHandler(async (request: express.Request, response: express.Response) => {
+  const functionId = `generateAllMissingUyeNumarasi_${Date.now()}`;
+  
+  try {
+    console.log(`[${functionId}] generateAllMissingUyeNumarasi başladı`);
+    
+    // Query parametrelerini al
+    const kayitYeri = request.query.kayitYeri as string | undefined;
+    const diyetisyenId = request.query.diyetisyenId as string | undefined;
+    
+    let query = webPanelDb.collection("diyetisyenler");
+
+    // Belirli bir diyetisyen için
+    if (diyetisyenId) {
+      console.log(`[${functionId}] Belirli diyetisyen kontrol ediliyor: ${diyetisyenId}`);
+      const doc = await query.doc(diyetisyenId).get();
+      
+      if (!doc.exists) {
+        response.status(404).json({ 
+          error: "Diyetisyen bulunamadı",
+          diyetisyenId: diyetisyenId,
+          functionId: functionId
+        });
+        return;
+      }
+
+      const data = doc.data();
+      const uyeNumarasi = data?.uyeNumarasi;
+
+      if (!uyeNumarasi || uyeNumarasi.trim() === "") {
+        const newUyeNumarasi = await generateUniqueUyeNumarasi();
+        await webPanelDb.collection("diyetisyenler").doc(diyetisyenId).update({
+          uyeNumarasi: newUyeNumarasi,
+          sonGuncelleme: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        response.status(200).json({ 
+          success: true,
+          diyetisyenId: diyetisyenId,
+          uyeNumarasi: newUyeNumarasi,
+          olusturuldu: true,
+          functionId: functionId
+        });
+      } else {
+        response.status(200).json({ 
+          success: true,
+          diyetisyenId: diyetisyenId,
+          uyeNumarasi: uyeNumarasi,
+          mevcut: true,
+          functionId: functionId
+        });
+      }
+      return;
+    }
+
+    // Tüm diyetisyenleri getir
+    const snapshot = await query.get();
+    
+    if (snapshot.empty) {
+      response.status(200).json({ 
+        success: true,
+        message: "Hiç diyetisyen bulunamadı",
+        toplam: 0,
+        eksik: 0,
+        guncellenen: 0,
+        functionId: functionId
+      });
+      return;
+    }
+
+    let eksikSayisi = 0;
+    let guncellenenSayisi = 0;
+    let hataSayisi = 0;
+    const guncellenenler: Array<{id: string, uyeNumarasi: string}> = [];
+    const hatalar: Array<{id: string, hata: string}> = [];
+
+    // Her diyetisyeni kontrol et
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      const diyetisyenId = doc.id;
+      const uyeNumarasi = data.uyeNumarasi;
+
+      // Kayıt yeri filtresi
+      if (kayitYeri && data.kayitYeri !== kayitYeri) {
+        continue;
+      }
+
+      // Üye numarası eksik mi kontrol et
+      if (!uyeNumarasi || uyeNumarasi.trim() === "" || uyeNumarasi === null || uyeNumarasi === undefined) {
+        eksikSayisi++;
+        
+        try {
+          const newUyeNumarasi = await generateUniqueUyeNumarasi();
+          await webPanelDb.collection("diyetisyenler").doc(diyetisyenId).update({
+            uyeNumarasi: newUyeNumarasi,
+            sonGuncelleme: admin.firestore.FieldValue.serverTimestamp(),
+          });
+
+          guncellenenSayisi++;
+          guncellenenler.push({ id: diyetisyenId, uyeNumarasi: newUyeNumarasi });
+          console.log(`[${functionId}] ✅ ${data.adSoyad || diyetisyenId} - ${newUyeNumarasi}`);
+        } catch (error: any) {
+          hataSayisi++;
+          hatalar.push({ id: diyetisyenId, hata: error.message });
+          console.error(`[${functionId}] ❌ Hata (${diyetisyenId}):`, error.message);
+        }
+      }
+    }
+
+    console.log(`[${functionId}] ✅ İşlem tamamlandı: ${guncellenenSayisi}/${eksikSayisi} güncellendi`);
+
+    response.status(200).json({ 
+      success: true,
+      toplam: snapshot.size,
+      eksik: eksikSayisi,
+      guncellenen: guncellenenSayisi,
+      hata: hataSayisi,
+      guncellenenler: guncellenenler.slice(0, 100), // İlk 100'ü göster
+      hatalar: hatalar.slice(0, 100), // İlk 100'ü göster
+      functionId: functionId,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error(`[${functionId}] ❌ generateAllMissingUyeNumarasi hatası:`, error);
+    response.status(500).json({ 
+      error: error.message || "Sunucu hatası",
+      functionId: functionId,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * Otomatik/Manuel fatura kesme endpoint'i (HTTP)
+ * Admin panelden veya Cloud Scheduler'dan çağrılabilir
+ * Her ayın 1'inde Cloud Scheduler ile otomatik çağrılabilir
+ */
+export const otomatikFaturaKesme = corsHandler(async (request: express.Request, response: express.Response) => {
+  const functionId = `otomatikFaturaKesme_${Date.now()}`;
+  
+  try {
+    console.log(`[${functionId}] Otomatik fatura kesme başladı`);
+    
+    // Önceki ayın faturalarını oluştur
+    // Not: Bu fonksiyon src/services/fatura/faturaOlusturmaService.ts'de tanımlı
+    // HTTP endpoint olarak çağrılabilir veya Cloud Scheduler ile otomatik çalıştırılabilir
+    
+    // Şimdilik manuel çağrı için hazır, Cloud Scheduler kurulumu için dokümantasyon eklenecek
+    response.status(200).json({
+      success: true,
+      message: "Fatura kesme işlemi admin panelden 'Faturalar' sayfasından yapılabilir",
+      functionId: functionId,
+      timestamp: new Date().toISOString(),
+      note: "Cloud Scheduler kurulumu için: Her ayın 1'inde bu endpoint'i çağıracak bir scheduler oluşturun"
+    });
+  } catch (error: any) {
+    console.error(`[${functionId}] ❌ Otomatik fatura kesme hatası:`, error);
+    response.status(500).json({
+      error: error.message || "Sunucu hatası",
+      functionId: functionId,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+export const syncAuthFromMobileApp = corsHandler(async (request: express.Request, response: express.Response) => {
+  const functionId = `syncAuthFromMobileApp_${Date.now()}`;
+  
+  try {
+    console.log(`[${functionId}] syncAuthFromMobileApp başladı`);
+    
+    const body = request.body as any;
+    const { uid, email, displayName, emailVerified, password } = body;
+    
+    if (!uid || !email) {
+      console.error(`[${functionId}] uid veya email eksik`);
+      response.status(400).json({ 
+        error: "uid ve email gerekli",
+        functionId: functionId,
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
+
+    console.log(`[${functionId}] Mobil uygulamadan Auth senkronizasyonu:`, { uid, email });
+
+    // Web panel Firebase projesinde kullanıcı oluştur
+    const webPanelAuth = admin.auth();
+    
+    try {
+      // Önce kullanıcı zaten var mı kontrol et
+      try {
+        await webPanelAuth.getUser(uid);
+        console.log(`[${functionId}] Kullanıcı zaten mevcut: ${uid}`);
+        response.status(200).json({ 
+          success: true,
+          message: "Kullanıcı zaten mevcut",
+          uid: uid,
+          functionId: functionId,
+          timestamp: new Date().toISOString()
+        });
+        return;
+      } catch (error: any) {
+        // Kullanıcı yoksa devam et
+        if (error.code !== "auth/user-not-found") {
+          throw error;
+        }
+      }
+
+      // Yeni kullanıcı oluştur
+      const createUserData: any = {
+        uid: uid,
+        email: email,
+        emailVerified: emailVerified || false,
+        displayName: displayName || "",
+      };
+
+      // Şifre varsa ekle
+      if (password) {
+        createUserData.password = password;
+      }
+
+      await webPanelAuth.createUser(createUserData);
+      
+      console.log(`[${functionId}] ✅ Auth kullanıcısı web panel projesine senkronize edildi: ${uid}`);
+      
+      response.status(200).json({ 
+        success: true,
+        message: "Auth kullanıcısı başarıyla senkronize edildi",
+        uid: uid,
+        functionId: functionId,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      console.error(`[${functionId}] Auth senkronizasyon hatası:`, {
+        message: error.message,
+        code: error.code,
+        uid: uid,
+        timestamp: new Date().toISOString()
+      });
+      
+      // Kullanıcı zaten varsa hata değil
+      if (error.code === "auth/uid-already-exists") {
+        response.status(200).json({ 
+          success: true,
+          message: "Kullanıcı zaten mevcut",
+          uid: uid,
+          functionId: functionId,
+          timestamp: new Date().toISOString()
+        });
+        return;
+      }
+      
+      throw error;
+    }
+  } catch (error: any) {
+    console.error(`[${functionId}] ❌ syncAuthFromMobileApp hatası:`, {
+      message: error.message,
+      stack: error.stack,
+      body: request.body,
+      timestamp: new Date().toISOString()
+    });
+    response.status(500).json({ 
+      error: error.message || "Sunucu hatası",
+      functionId: functionId,
+      timestamp: new Date().toISOString()
+    });
+  }
+});

@@ -1,0 +1,214 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function to check if user is admin
+    function isAdmin() {
+      return request.auth != null && 
+             exists(/databases/$(database)/documents/adminler/$(request.auth.uid)) &&
+             (
+               get(/databases/$(database)/documents/adminler/$(request.auth.uid)).data.status == 'approved' ||
+               get(/databases/$(database)/documents/adminler/$(request.auth.uid)).data.aktif == true
+             );
+    }
+    
+    // Adminler collection
+    match /adminler/{adminId} {
+      // Kullanıcılar kendi admin kayıtlarını okuyabilir (giriş kontrolü için)
+      // Adminler tüm admin kayıtlarını okuyabilir
+      // Not: isAdmin() kullanmıyoruz çünkü circular dependency yaratır
+      // Bunun yerine kullanıcının kendi kaydını okumasına izin veriyoruz
+      allow read: if request.auth != null && 
+                   (request.auth.uid == adminId || 
+                    (request.auth.uid != adminId && 
+                     exists(/databases/$(database)/documents/adminler/$(request.auth.uid)) &&
+                     (get(/databases/$(database)/documents/adminler/$(request.auth.uid)).data.status == 'approved' ||
+                      get(/databases/$(database)/documents/adminler/$(request.auth.uid)).data.aktif == true)));
+      // Kullanıcılar kendi admin kayıtlarını oluşturabilir (admin kayıt sayfası için)
+      allow create: if request.auth != null && 
+                     request.auth.uid == adminId &&
+                     request.resource.data.status == 'approved' &&
+                     request.resource.data.role == 'superAdmin';
+      // Kullanıcılar kendi admin kayıtlarını güncelleyebilir
+      allow update: if request.auth != null && 
+                     request.auth.uid == adminId &&
+                     request.resource.data.status == 'approved';
+      // Silme işlemi sadece adminler tarafından yapılabilir
+      allow delete: if isAdmin();
+    }
+    
+    // Diyetisyenler collection
+    match /diyetisyenler/{diyetisyenId} {
+      // Kullanıcılar kendi diyetisyen kayıtlarını okuyabilir, adminler tümünü okuyabilir
+      allow read: if request.auth != null && 
+                   (request.auth.uid == diyetisyenId || isAdmin());
+      allow create: if isAdmin() || request.auth != null; // Mobil uygulamadan da eklenebilir
+      allow update: if isAdmin() || (request.auth != null && request.auth.uid == diyetisyenId);
+      allow delete: if isAdmin();
+    }
+    
+    // Ödemeler collection (Eski sistem - geriye dönük uyumluluk için)
+    match /odemeler/{odemeId} {
+      // Diyetisyenler kendi ödemelerini okuyabilir, adminler tümünü okuyabilir
+      allow read: if request.auth != null && 
+                   (resource.data.diyetisyenId == request.auth.uid || isAdmin());
+      // Diyetisyenler kendi ödemelerini oluşturabilir (onay için), adminler tümünü oluşturabilir
+      allow create: if request.auth != null && 
+                     (request.resource.data.diyetisyenId == request.auth.uid || isAdmin());
+      // Sadece adminler ödeme güncelleyebilir (onay için)
+      allow update: if isAdmin();
+      // Sadece adminler ödeme silebilir
+      allow delete: if isAdmin();
+    }
+    
+    // Faturalar collection (Yeni sistem)
+    match /faturalar/{faturaId} {
+      // Diyetisyenler kendi faturalarını okuyabilir, adminler tümünü okuyabilir
+      allow read: if request.auth != null && 
+                   (resource.data.diyetisyenId == request.auth.uid || isAdmin());
+      // Sadece adminler fatura oluşturabilir (otomatik fatura oluşturma için)
+      allow create: if isAdmin();
+      // Sadece adminler fatura güncelleyebilir (tahsilat onayı için)
+      allow update: if isAdmin();
+      // Sadece adminler fatura silebilir
+      allow delete: if isAdmin();
+    }
+    
+    // Ayarlar collection
+    match /ayarlar/{ayarId} {
+      // Herkes ayarları okuyabilir (public sayfalar için paket fiyatları vb.)
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    
+    // Aktivite logları (sadece adminler okuyabilir)
+    match /aktiviteLoglari/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update: if false;
+      allow delete: if false;
+    }
+    
+    // Yasal onay logları (sadece adminler okuyabilir)
+    match /yasalOnayLoglari/{logId} {
+      allow read: if isAdmin();
+      allow create: if request.auth != null; // Diyetisyenler kayıt olurken log oluşturabilir
+      allow update: if false;
+      allow delete: if false;
+    }
+    
+    // Evraklar collection
+    match /evraklar/{evrakId} {
+      // Diyetisyenler kendi evraklarını okuyabilir, adminler tümünü okuyabilir
+      allow read: if request.auth != null && 
+                   (resource.data.diyetisyenId == request.auth.uid || isAdmin());
+      // Diyetisyenler kendi evraklarını oluşturabilir
+      allow create: if request.auth != null && 
+                     request.resource.data.diyetisyenId == request.auth.uid;
+      // Diyetisyenler kendi evraklarını güncelleyebilir (yeniden yükleme için), adminler onay/red için güncelleyebilir
+      allow update: if request.auth != null && 
+                     (resource.data.diyetisyenId == request.auth.uid || isAdmin());
+      // Sadece adminler evrak silebilir
+      allow delete: if isAdmin();
+    }
+    
+    // Eşleşmeler collection
+    match /eslesmeler/{eslesmeId} {
+      // Adminler tüm eşleşmeleri okuyabilir
+      allow read: if isAdmin();
+      // Adminler eşleşmeleri oluşturabilir ve güncelleyebilir
+      allow write: if isAdmin();
+    }
+    
+    // Mesajlar collection
+    match /mesajlar/{mesajId} {
+      // Diyetisyenler kendi mesajlarını okuyabilir, adminler tümünü okuyabilir
+      allow read: if request.auth != null && 
+                   (resource.data.diyetisyenId == request.auth.uid || isAdmin());
+      // Diyetisyenler ve adminler mesaj gönderebilir
+      allow create: if request.auth != null && 
+                     (request.resource.data.diyetisyenId == request.auth.uid || isAdmin());
+      // Diyetisyenler kendi mesajlarını güncelleyebilir (okundu işareti için), adminler tümünü güncelleyebilir
+      allow update: if request.auth != null && 
+                     (resource.data.diyetisyenId == request.auth.uid || isAdmin());
+      // Silme işlemi sadece adminler tarafından yapılabilir
+      allow delete: if isAdmin();
+    }
+    
+    // Bildirimler collection
+    match /bildirimler/{bildirimId} {
+      // Diyetisyenler kendi bildirimlerini okuyabilir, adminler tümünü okuyabilir
+      allow read: if request.auth != null && 
+                   (resource.data.diyetisyenId == request.auth.uid || isAdmin());
+      // Sadece adminler bildirim oluşturabilir
+      allow create: if isAdmin();
+      // Diyetisyenler kendi bildirimlerini güncelleyebilir (görüldü işareti, silme için), adminler tümünü güncelleyebilir
+      allow update: if request.auth != null && 
+                     (resource.data.diyetisyenId == request.auth.uid || isAdmin());
+      // Silme işlemi sadece adminler tarafından yapılabilir (soft delete için update kullanılır)
+      allow delete: if false; // Soft delete kullanılıyor, update ile durum değiştiriliyor
+    }
+    
+    // Giderler collection
+    match /giderler/{giderId} {
+      // Sadece adminler giderleri okuyabilir
+      allow read: if isAdmin();
+      // Sadece adminler gider oluşturabilir
+      allow create: if isAdmin();
+      // Sadece adminler gider güncelleyebilir
+      allow update: if isAdmin();
+      // Sadece adminler gider silebilir
+      allow delete: if isAdmin();
+    }
+    
+    // Kartvizitler collection
+    match /kartvizitler/{kartvizitId} {
+      // Adminler tüm kartvizitleri okuyabilir, herkes sadece aktif olanları okuyabilir (paylaşım linki için)
+      allow read: if isAdmin() || (resource != null && resource.data.aktif == true);
+      // Sadece adminler kartvizit oluşturabilir
+      allow create: if isAdmin();
+      // Sadece adminler kartvizit güncelleyebilir
+      allow update: if isAdmin();
+      // Sadece adminler kartvizit silebilir
+      allow delete: if isAdmin();
+    }
+    
+    // Teşekkür Kartları collection
+    match /tesekkurKartlari/{kartId} {
+      // Adminler tüm kartları okuyabilir, herkes sadece aktif olanları okuyabilir (paylaşım linki için)
+      allow read: if isAdmin() || (resource != null && resource.data.aktif == true);
+      // Sadece adminler teşekkür kartı oluşturabilir
+      allow create: if isAdmin();
+      // Sadece adminler teşekkür kartı güncelleyebilir
+      allow update: if isAdmin();
+      // Sadece adminler teşekkür kartı silebilir
+      allow delete: if isAdmin();
+    }
+    
+    // İlanlar collection
+    match /ilanlar/{ilanId} {
+      // Herkes aktif ilanları okuyabilir (public kariyer sayfası için), adminler tümünü okuyabilir
+      allow read: if isAdmin() || (resource != null && resource.data.aktif == true);
+      // Sadece adminler ilan oluşturabilir
+      allow create: if isAdmin();
+      // Sadece adminler ilan güncelleyebilir
+      allow update: if isAdmin();
+      // Sadece adminler ilan silebilir
+      allow delete: if isAdmin();
+    }
+    
+    // Başvurular collection
+    match /basvurular/{basvuruId} {
+      // Sadece adminler başvuruları okuyabilir
+      // Ancak başvuru sayısı için sadece count query'sine izin ver (güvenlik için)
+      allow read: if isAdmin();
+      // Herkes başvuru oluşturabilir (public kariyer sayfasından)
+      allow create: if true; // Public kullanıcılar da başvuru yapabilir
+      // Sadece adminler başvuru güncelleyebilir
+      allow update: if isAdmin();
+      // Sadece adminler başvuru silebilir
+      allow delete: if isAdmin();
+    }
+  }
+}
+
+

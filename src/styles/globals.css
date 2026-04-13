@@ -1,0 +1,131 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-dark-card;
+  }
+  
+  body {
+    @apply bg-black text-white font-sans antialiased;
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    scroll-behavior: smooth;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  .font-cormorant {
+    font-family: 'Cormorant Garamond', serif;
+  }
+
+  .font-times {
+    font-family: 'Times New Roman', serif;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-accent-green text-dark-bg font-semibold px-6 py-3 rounded-lg 
+           hover:bg-opacity-90 transition-all duration-200 
+           active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply bg-dark-card text-dark-text font-semibold px-6 py-3 rounded-lg 
+           hover:bg-dark-card-hover transition-all duration-200 
+           active:scale-95 border border-dark-card-hover;
+  }
+
+  .btn-danger {
+    @apply bg-accent-red text-white font-semibold px-6 py-3 rounded-lg 
+           hover:bg-opacity-90 transition-all duration-200 
+           active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .card {
+    @apply bg-dark-card rounded-xl p-6 border border-dark-card-hover 
+           hover:border-opacity-50 transition-all duration-200;
+  }
+
+  .input {
+    @apply bg-dark-card border border-dark-card-hover rounded-lg px-4 py-3 
+           text-dark-text placeholder-dark-text-secondary 
+           focus:outline-none focus:border-accent-green focus:ring-1 
+           focus:ring-accent-green transition-all duration-200;
+  }
+
+  .label {
+    @apply text-dark-text-secondary text-sm font-medium mb-2 block;
+  }
+
+  .badge {
+    @apply px-3 py-1 rounded-full text-xs font-semibold;
+  }
+
+  .badge-success {
+    @apply bg-accent-green bg-opacity-20 text-accent-green;
+  }
+
+  .badge-warning {
+    @apply bg-yellow-500 bg-opacity-20 text-yellow-500;
+  }
+
+  .badge-danger {
+    @apply bg-accent-red bg-opacity-20 text-accent-red;
+  }
+
+  .badge-info {
+    @apply bg-accent-blue bg-opacity-20 text-accent-blue;
+  }
+}
+
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  .gradient-text {
+    @apply bg-gradient-to-r from-accent-green to-accent-blue bg-clip-text text-transparent;
+  }
+
+  .animated-bg {
+    background: linear-gradient(
+      135deg,
+      #000000 0%,
+      #1a1a1a 50%,
+      #000000 100%
+    );
+    background-size: 200% 200%;
+    animation: gradient 15s ease infinite;
+  }
+
+  @keyframes gradient {
+    0% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0% 50%;
+    }
+  }
+}
+
+

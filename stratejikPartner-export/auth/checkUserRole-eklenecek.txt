@@ -1,0 +1,25 @@
+// Bu kodu checkUserRole fonksiyonunun EN BAŞINA ekleyin (admin kontrolünden ÖNCE)
+// Gerekli import: query, collection, where, getDocs, updateDoc, doc, Timestamp
+
+// Stratejik partner kontrolü (email ile)
+const partnerQuery = query(
+  collection(db, 'stratejikPartnerGiris'),
+  where('email', '==', user.email?.toLowerCase()),
+  where('aktif', '==', true)
+);
+const partnerSnap = await getDocs(partnerQuery);
+if (!partnerSnap.empty) {
+  const partnerData = partnerSnap.docs[0].data();
+  if (partnerData.uid !== user.uid) {
+    await updateDoc(doc(db, 'stratejikPartnerGiris', partnerSnap.docs[0].id), {
+      uid: user.uid,
+      sonGiris: Timestamp.now(),
+    });
+  }
+  return {
+    uid: user.uid,
+    email: user.email || '',
+    adSoyad: partnerData.firmaAdi || 'Stratejik Partner',
+    rol: 'stratejikPartner',
+  };
+}

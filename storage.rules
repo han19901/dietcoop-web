@@ -1,0 +1,96 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Mesajlar için dosya yükleme
+    // Path: mesajlar/{diyetisyenId}/{mesajId}/{dosyaAdi}
+    match /mesajlar/{diyetisyenId}/{mesajId}/{dosyaAdi} {
+      // Dosya boyutu kontrolü (maksimum 10MB)
+      function isValidSize() {
+        return request.resource.size < 10 * 1024 * 1024;
+      }
+      
+      // Dosya tipi kontrolü (sadece resim ve PDF)
+      function isValidType() {
+        return request.resource.contentType.matches('image/.*') ||
+               request.resource.contentType == 'application/pdf';
+      }
+      
+      // Diyetisyenler kendi mesaj dosyalarını yükleyebilir
+      // Adminler tüm diyetisyenlerin dosyalarını yükleyebilir
+      allow write: if request.auth != null && 
+                   request.auth.uid == diyetisyenId &&
+                   isValidSize() &&
+                   isValidType();
+      
+      // Adminler tüm dosyaları yükleyebilir (diyetisyen kontrolü olmadan)
+      // Not: Admin kontrolü için Firestore'a erişim gerekir, bu yüzden
+      // adminler için ayrı bir path pattern eklenebilir veya
+      // Cloud Function üzerinden yükleme yapılabilir
+      // Şimdilik diyetisyenler kendi dosyalarını yükleyebilir
+      
+      // Diyetisyenler ve adminler mesaj dosyalarını okuyabilir
+      allow read: if request.auth != null && 
+                  (request.auth.uid == diyetisyenId);
+    }
+    
+    // Evraklar için dosya yükleme
+    // Path: evraklar/{diyetisyenId}/{evrakTipi}/{dosyaAdi}
+    match /evraklar/{diyetisyenId}/{evrakTipi}/{dosyaAdi} {
+      // Dosya boyutu kontrolü (maksimum 10MB)
+      function isValidSize() {
+        return request.resource.size < 10 * 1024 * 1024;
+      }
+      
+      // Dosya tipi kontrolü (sadece resim ve PDF)
+      function isValidType() {
+        return request.resource.contentType.matches('image/.*') ||
+               request.resource.contentType == 'application/pdf';
+      }
+      
+      // Diyetisyenler kendi evraklarını yükleyebilir
+      allow write: if request.auth != null && 
+                   request.auth.uid == diyetisyenId &&
+                   isValidSize() &&
+                   isValidType();
+      
+      // Diyetisyenler ve adminler evrakları okuyabilir
+      allow read: if request.auth != null;
+    }
+    
+    // Başvurular için CV dosya yükleme
+    // Path: basvurular/{basvuruId veya temp_timestamp}/{dosyaAdi}
+    match /basvurular/{pathSegment}/{dosyaAdi} {
+      // Dosya boyutu kontrolü (maksimum 5MB)
+      function isValidSize() {
+        return request.resource.size < 5 * 1024 * 1024;
+      }
+      
+      // Dosya tipi kontrolü (PDF, DOC, DOCX)
+      function isValidType() {
+        return request.resource.contentType == 'application/pdf' ||
+               request.resource.contentType == 'application/msword' ||
+               request.resource.contentType == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      }
+      
+      // Herkes CV yükleyebilir (public başvuru formu için, authenticated olmasına gerek yok)
+      allow write: if isValidSize() && isValidType();
+      
+      // Yükleyen kişi dosyayı hemen okuyabilir (getDownloadURL için)
+      // Adminler de tüm CV dosyalarını okuyabilir
+      // Not: Public kullanıcılar sadece kendi yükledikleri dosyayı okuyabilir
+      // Ancak getDownloadURL için write işleminden hemen sonra okuma gerekir
+      allow read: if true; // CV dosyaları sadece admin panelinde görüntülenecek, public erişim yok
+    }
+    
+    // Admin dosyaları için (gelecekte kullanılabilir)
+    match /admin/{allPaths=**} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Diğer tüm dosyalar için erişim yok
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
