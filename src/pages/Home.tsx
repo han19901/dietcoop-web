@@ -17,7 +17,8 @@ import {
   Menu,
   X,
   Sparkles,
-  Briefcase
+  Briefcase,
+  Download
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { ayarlarService } from '@/services/firebase/firestore';
@@ -284,6 +285,10 @@ export default function Home() {
                 <Briefcase size={18} />
                 Kariyer
               </Link>
+              <a href="#indir" className="text-white/70 hover:text-white transition text-base font-medium flex items-center gap-2">
+                <Download size={18} />
+                İndir
+              </a>
               <Link to="/login" className="bg-[#00ff88] text-black px-8 py-3 rounded-lg font-semibold hover:bg-[#00ff88]/90 transition text-base">
                 Giriş Yap
               </Link>
@@ -351,14 +356,22 @@ export default function Home() {
                   <MessageCircle size={18} />
                   SSS
                 </a>
-                <Link 
-                  to="/kariyer" 
+                <Link
+                  to="/kariyer"
                   className="text-white/70 hover:text-white transition text-base font-medium flex items-center gap-2 px-2 py-2 hover:bg-white/5 rounded-lg"
                   onClick={() => setMobileMenuOpen(false)}
                 >
                   <Briefcase size={18} />
                   Kariyer
                 </Link>
+                <a
+                  href="#indir"
+                  className="text-white/70 hover:text-white transition text-base font-medium flex items-center gap-2 px-2 py-2 hover:bg-white/5 rounded-lg"
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  <Download size={18} />
+                  İndir
+                </a>
               </div>
               </motion.div>
             )}
@@ -534,12 +547,55 @@ export default function Home() {
               Giriş Yap
               <ArrowRight size={20} />
             </Link>
-            <a 
-              href="#nasil-calisir" 
+            <a
+              href="#nasil-calisir"
               className="bg-white/5 border border-white/10 text-white px-8 py-4 rounded-lg font-semibold hover:bg-white/10 transition flex items-center gap-2 justify-center text-lg"
             >
               Nasıl Çalışır?
               <ChevronDown size={20} />
+            </a>
+          </motion.div>
+
+          {/* Store Butonları */}
+          <motion.div
+            id="indir"
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, delay: 0.9 }}
+            className="flex flex-col sm:flex-row gap-4 justify-center items-center mt-8 scroll-mt-28"
+          >
+            <a
+              href="https://apps.apple.com/us/app/dietcoop-pro/id6762084757"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="App Store'dan indir"
+              className="bg-black border border-white/20 hover:border-[#00ff88] text-white px-6 py-3 rounded-xl flex items-center gap-3 transition hover:bg-white/5"
+            >
+              <svg viewBox="0 0 24 24" className="w-8 h-8" fill="currentColor" aria-hidden="true">
+                <path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.234-2.59-1.965-2.75-3.455-7.83-1.44-11.25.993-1.73 2.753-2.82 4.644-2.82 1.368 0 2.678.93 3.516.93.796 0 2.28-1.15 4.006-1.15.72 0 3.232.06 4.87 2.38-.131.08-2.905 1.7-2.875 5.09.033 4.05 3.57 5.42 3.6 5.44z"/>
+              </svg>
+              <div className="flex flex-col items-start leading-tight">
+                <span className="text-[11px] text-white/70">İndirmek için tıklayın</span>
+                <span className="text-lg font-semibold">App Store</span>
+              </div>
+            </a>
+            <a
+              href="https://play.google.com/store/apps/details?id=com.dietcoop.mobile.app"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Google Play'den indir"
+              className="bg-black border border-white/20 hover:border-[#00ff88] text-white px-6 py-3 rounded-xl flex items-center gap-3 transition hover:bg-white/5"
+            >
+              <svg viewBox="0 0 512 512" className="w-8 h-8" aria-hidden="true">
+                <path fill="#00C3FF" d="M47 0C34 6.8 25.3 19.2 25.3 35.3v441.3c0 16.1 8.7 28.5 21.7 35.3l256.6-256L47 0z"/>
+                <path fill="#00E676" d="M325.3 234.3 104.6 13l280.8 161.2-60.1 60.1z"/>
+                <path fill="#FFC400" d="M472.2 225.6l-58.9-34.1-65.7 64.5 65.7 64.5 60.1-34.1c18-14.3 18-46.5-1.2-60.8z"/>
+                <path fill="#F44336" d="M104.6 499l280.8-161.2-60.1-60.1L104.6 499z"/>
+              </svg>
+              <div className="flex flex-col items-start leading-tight">
+                <span className="text-[11px] text-white/70">İndirmek için tıklayın</span>
+                <span className="text-lg font-semibold">Google Play</span>
+              </div>
             </a>
           </motion.div>
         </div>
