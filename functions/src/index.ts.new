@@ -181,7 +181,9 @@ const corsHandler = (
   });
   
   // Express app'i Firebase Functions'a bağla
-  return functions.https.onRequest(app);
+  // invoker: "public" → allUsers'a Cloud Functions Invoker yetkisi otomatik verilir
+  // (firebase-functions v6'da bu artık manuel set edilmesi gerekiyor)
+  return functions.runWith({ invoker: "public" }).https.onRequest(app);
 };
 
 /**

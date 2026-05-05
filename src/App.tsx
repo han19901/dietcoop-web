@@ -39,6 +39,7 @@ const Kartvizitler = lazy(() => import('./pages/Kartvizitler'));
 const TesekkurKartlari = lazy(() => import('./pages/TesekkurKartlari'));
 const Ilanlar = lazy(() => import('./pages/Ilanlar'));
 const Basvurular = lazy(() => import('./pages/Basvurular'));
+const ManuelKayit = lazy(() => import('./pages/ManuelKayit'));
 
 // Diyetisyen pages - lazy load
 const DiyetisyenDashboard = lazy(() => import('./pages/diyetisyen/DiyetisyenDashboard'));
@@ -274,6 +275,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <Basvurular />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/manuel-kayit"
+        element={
+          <ProtectedRoute>
+            <ManuelKayit />
           </ProtectedRoute>
         }
       />

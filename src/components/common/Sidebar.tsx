@@ -15,7 +15,8 @@ import {
   CreditCard,
   Briefcase,
   UserCheck,
-  Heart
+  Heart,
+  UserPlus
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState } from 'react';
@@ -23,6 +24,7 @@ import { useState } from 'react';
 const menuItems = [
   { path: '/admin', icon: LayoutDashboard, label: 'Dashboard' },
   { path: '/admin/diyetisyenler', icon: Users, label: 'Diyetisyenler' },
+  { path: '/admin/manuel-kayit', icon: UserPlus, label: 'Manuel Kayıt' },
   { path: '/admin/faturalar', icon: FileText, label: 'Faturalar' },
   { path: '/admin/finans', icon: DollarSign, label: 'Finans' },
   { path: '/admin/giderler', icon: TrendingDown, label: 'Giderler' },
