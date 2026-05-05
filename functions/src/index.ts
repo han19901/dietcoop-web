@@ -1025,6 +1025,33 @@ export const syncDiyetisyenToMobileApp = functions.firestore
       return;
     }
 
+    // ────────────────────────────────────────────────────────────────────
+    // ANTI-LOOP GUARD
+    //
+    // Mobile cloud function `syncDietitianToWebPanel` `deletedAt` görürse
+    // web doc'una `email: deleted_dietitian_${Date.now()}@deleted.local` ve
+    // `adSoyad: "Silinmiş Diyetisyen"` yazar. Buradan da mobile'a geri sync
+    // edersek mobile users değişir → mobile sync tekrar tetiklenir → yeni
+    // Date.now() ile yeniden yazılır → SONSUZ DÖNGÜ.
+    //
+    // Bu yüzden silinmiş işaretli diyetisyenleri mobile'a geri yansıtmıyoruz —
+    // mobile zaten silinmiş bilgiyi tutuyor, web'in onu mobile'a yazması
+    // gereksiz ve döngü tetikliyor.
+    // ────────────────────────────────────────────────────────────────────
+    const isDeletedDoc = diyetisyenData?.isDeleted === true;
+    const emailLooksLikeDeletedPlaceholder =
+      typeof diyetisyenData?.email === "string" &&
+      diyetisyenData.email.startsWith("deleted_dietitian_") &&
+      diyetisyenData.email.endsWith("@deleted.local");
+    const adSoyadIsDeletedPlaceholder = diyetisyenData?.adSoyad === "Silinmiş Diyetisyen";
+    if (isDeletedDoc || emailLooksLikeDeletedPlaceholder || adSoyadIsDeletedPlaceholder) {
+      console.log(
+        `[syncDiyetisyenToMobileApp] Diyetisyen ${diyetisyenId} silinmiş işaretli, ` +
+          "mobile'a geri yazılmadı (sonsuz döngü engelleme).",
+      );
+      return;
+    }
+
     try {
       if (diyetisyenData) {
         // Ad soyadı ayır
@@ -1777,6 +1804,378 @@ export const adminCreateMobileUser = corsHandler(async (request: express.Request
       message: error.message,
       stack: error.stack,
     });
+    if (!response.headersSent) {
+      response.status(500).json({ error: error.message || "Sunucu hatası", functionId });
+    }
+  }
+});
+
+// ============================================================================
+// MEAL TEMPLATE (Öğün Şablonu) — Cross-project CRUD
+// Web panel'deki diyetisyen ID token'ı ile mobil Firebase projesine
+// (dietcoop-432fa) `mealTemplates` koleksiyonuna yazma/okuma yapılır.
+// Web ve mobil aynı diyetisyen UID'sini paylaştığı için (mobile-app sync),
+// token'dan gelen uid doğrudan dietitianId olarak kullanılabilir.
+// ============================================================================
+
+interface MealTemplateItemPayload {
+  name: string;
+  amount: number;
+  unit: string;
+  calories?: number;
+  displayUnit?: string;
+}
+
+interface MealTemplateMealPayload {
+  mealType: string;
+  mealNumber: number;
+  items: MealTemplateItemPayload[];
+}
+
+/**
+ * Authorization: Bearer <web panel id token>'ı doğrula.
+ * Diyetisyen rolü kontrolü yapar; uyumlu UID'i döner.
+ */
+async function authenticateDiyetisyen(
+  request: express.Request
+): Promise<{ uid: string } | { error: string; status: number }> {
+  const authHeader = request.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return { error: "Authorization bearer token eksik", status: 401 };
+  }
+  const idToken = authHeader.substring("Bearer ".length);
+  const webPanelAuth = admin.auth();
+  let decoded: admin.auth.DecodedIdToken;
+  try {
+    decoded = await webPanelAuth.verifyIdToken(idToken);
+  } catch (err: any) {
+    return { error: "Geçersiz veya süresi dolmuş token", status: 401 };
+  }
+
+  // Diyetisyen kaydı var mı kontrol et
+  const diyetisyenSnap = await webPanelDb
+    .collection("diyetisyenler")
+    .doc(decoded.uid)
+    .get();
+  if (!diyetisyenSnap.exists) {
+    // Admin de izin alabilir
+    const adminSnap = await webPanelDb.collection("adminler").doc(decoded.uid).get();
+    if (!adminSnap.exists) {
+      return { error: "Diyetisyen kaydı bulunamadı", status: 403 };
+    }
+  }
+
+  return { uid: decoded.uid };
+}
+
+function sanitizeTemplateMeals(rawMeals: any): MealTemplateMealPayload[] {
+  if (!Array.isArray(rawMeals)) return [];
+  return rawMeals.map((meal: any, index: number) => {
+    const mealType = typeof meal?.mealType === "string" ? meal.mealType.trim() : "";
+    const mealNumber = Number.isFinite(Number(meal?.mealNumber))
+      ? Number(meal.mealNumber)
+      : index + 1;
+    const items = Array.isArray(meal?.items)
+      ? meal.items.map((item: any) => {
+        const out: MealTemplateItemPayload = {
+          name: typeof item?.name === "string" ? item.name.trim() : "",
+          amount: Number.isFinite(Number(item?.amount)) ? Number(item.amount) : 0,
+          unit: typeof item?.unit === "string" ? item.unit : "gram",
+          calories: Number.isFinite(Number(item?.calories)) ? Number(item.calories) : 0,
+        };
+        if (typeof item?.displayUnit === "string" && item.displayUnit.trim()) {
+          out.displayUnit = item.displayUnit.trim();
+        }
+        return out;
+      })
+      : [];
+    return { mealType, mealNumber, items };
+  });
+}
+
+/**
+ * Diyetisyenin tüm şablonlarını listele
+ */
+export const listMealTemplates = corsHandler(async (
+  request: express.Request,
+  response: express.Response
+) => {
+  const functionId = `listMealTemplates_${Date.now()}`;
+  try {
+    if (request.method !== "GET" && request.method !== "POST") {
+      response.status(405).json({ error: "GET veya POST desteklenir", functionId });
+      return;
+    }
+    const authResult = await authenticateDiyetisyen(request);
+    if ("error" in authResult) {
+      response.status(authResult.status).json({ error: authResult.error, functionId });
+      return;
+    }
+    const dietitianId = authResult.uid;
+
+    const snapshot = await mobileAppDb
+      .collection("mealTemplates")
+      .where("dietitianId", "==", dietitianId)
+      .get();
+
+    const templates = snapshot.docs.map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        name: data.name || "",
+        category: data.category || null,
+        dietitianId: data.dietitianId,
+        meals: data.meals || [],
+        createdAt: data.createdAt?.toDate?.()?.toISOString?.() || null,
+        updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
+      };
+    });
+
+    // Memory'de en yeni önce sırala
+    templates.sort((a, b) => {
+      const at = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return bt - at;
+    });
+
+    response.status(200).json({ templates, functionId });
+  } catch (error: any) {
+    console.error(`[${functionId}] listMealTemplates hata:`, error);
+    if (!response.headersSent) {
+      response.status(500).json({ error: error.message || "Sunucu hatası", functionId });
+    }
+  }
+});
+
+/**
+ * Tek bir şablonu getir
+ */
+export const getMealTemplate = corsHandler(async (
+  request: express.Request,
+  response: express.Response
+) => {
+  const functionId = `getMealTemplate_${Date.now()}`;
+  try {
+    const authResult = await authenticateDiyetisyen(request);
+    if ("error" in authResult) {
+      response.status(authResult.status).json({ error: authResult.error, functionId });
+      return;
+    }
+    const dietitianId = authResult.uid;
+
+    let templateId: string | undefined;
+    if (request.method === "POST") {
+      const body = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
+      templateId = body?.templateId;
+    } else {
+      templateId = request.query.templateId as string;
+    }
+    if (!templateId) {
+      response.status(400).json({ error: "templateId gerekli", functionId });
+      return;
+    }
+
+    const docRef = await mobileAppDb.collection("mealTemplates").doc(templateId).get();
+    if (!docRef.exists) {
+      response.status(404).json({ error: "Şablon bulunamadı", functionId });
+      return;
+    }
+    const data = docRef.data() || {};
+    if (data.dietitianId !== dietitianId) {
+      response.status(403).json({ error: "Bu şablona erişim yetkiniz yok", functionId });
+      return;
+    }
+
+    response.status(200).json({
+      template: {
+        id: docRef.id,
+        name: data.name || "",
+        category: data.category || null,
+        dietitianId: data.dietitianId,
+        meals: data.meals || [],
+        createdAt: data.createdAt?.toDate?.()?.toISOString?.() || null,
+        updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
+      },
+      functionId,
+    });
+  } catch (error: any) {
+    console.error(`[${functionId}] getMealTemplate hata:`, error);
+    if (!response.headersSent) {
+      response.status(500).json({ error: error.message || "Sunucu hatası", functionId });
+    }
+  }
+});
+
+/**
+ * Yeni şablon oluştur
+ */
+export const createMealTemplate = corsHandler(async (
+  request: express.Request,
+  response: express.Response
+) => {
+  const functionId = `createMealTemplate_${Date.now()}`;
+  try {
+    if (request.method !== "POST") {
+      response.status(405).json({ error: "POST desteklenir", functionId });
+      return;
+    }
+    const authResult = await authenticateDiyetisyen(request);
+    if ("error" in authResult) {
+      response.status(authResult.status).json({ error: authResult.error, functionId });
+      return;
+    }
+    const dietitianId = authResult.uid;
+
+    const body = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
+    const name = (body?.name || "").toString().trim();
+    const category = body?.category ? body.category.toString().trim() : null;
+    const meals = sanitizeTemplateMeals(body?.meals);
+
+    if (!name) {
+      response.status(400).json({ error: "Şablon adı gerekli", functionId });
+      return;
+    }
+
+    const docData = {
+      dietitianId,
+      name,
+      category: category || null,
+      meals,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    const docRef = await mobileAppDb.collection("mealTemplates").add(docData);
+
+    response.status(200).json({
+      success: true,
+      templateId: docRef.id,
+      functionId,
+    });
+  } catch (error: any) {
+    console.error(`[${functionId}] createMealTemplate hata:`, error);
+    if (!response.headersSent) {
+      response.status(500).json({ error: error.message || "Sunucu hatası", functionId });
+    }
+  }
+});
+
+/**
+ * Var olan şablonu güncelle
+ */
+export const updateMealTemplate = corsHandler(async (
+  request: express.Request,
+  response: express.Response
+) => {
+  const functionId = `updateMealTemplate_${Date.now()}`;
+  try {
+    if (request.method !== "POST" && request.method !== "PUT") {
+      response.status(405).json({ error: "POST/PUT desteklenir", functionId });
+      return;
+    }
+    const authResult = await authenticateDiyetisyen(request);
+    if ("error" in authResult) {
+      response.status(authResult.status).json({ error: authResult.error, functionId });
+      return;
+    }
+    const dietitianId = authResult.uid;
+
+    const body = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
+    const templateId = (body?.templateId || "").toString().trim();
+    const name = (body?.name || "").toString().trim();
+    const category = body?.category !== undefined
+      ? (body.category ? body.category.toString().trim() : null)
+      : undefined;
+    const meals = sanitizeTemplateMeals(body?.meals);
+
+    if (!templateId) {
+      response.status(400).json({ error: "templateId gerekli", functionId });
+      return;
+    }
+    if (!name) {
+      response.status(400).json({ error: "Şablon adı gerekli", functionId });
+      return;
+    }
+
+    const docRef = mobileAppDb.collection("mealTemplates").doc(templateId);
+    const snap = await docRef.get();
+    if (!snap.exists) {
+      response.status(404).json({ error: "Şablon bulunamadı", functionId });
+      return;
+    }
+    const existing = snap.data() || {};
+    if (existing.dietitianId !== dietitianId) {
+      response.status(403).json({ error: "Bu şablona erişim yetkiniz yok", functionId });
+      return;
+    }
+
+    const updateData: any = {
+      name,
+      meals,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (category !== undefined) {
+      updateData.category = category;
+    }
+
+    await docRef.update(updateData);
+    response.status(200).json({ success: true, functionId });
+  } catch (error: any) {
+    console.error(`[${functionId}] updateMealTemplate hata:`, error);
+    if (!response.headersSent) {
+      response.status(500).json({ error: error.message || "Sunucu hatası", functionId });
+    }
+  }
+});
+
+/**
+ * Şablonu sil
+ */
+export const deleteMealTemplate = corsHandler(async (
+  request: express.Request,
+  response: express.Response
+) => {
+  const functionId = `deleteMealTemplate_${Date.now()}`;
+  try {
+    if (request.method !== "POST" && request.method !== "DELETE") {
+      response.status(405).json({ error: "POST/DELETE desteklenir", functionId });
+      return;
+    }
+    const authResult = await authenticateDiyetisyen(request);
+    if ("error" in authResult) {
+      response.status(authResult.status).json({ error: authResult.error, functionId });
+      return;
+    }
+    const dietitianId = authResult.uid;
+
+    let templateId: string | undefined;
+    if (request.method === "DELETE") {
+      templateId = (request.query.templateId as string) || undefined;
+    } else {
+      const body = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
+      templateId = body?.templateId;
+    }
+    if (!templateId) {
+      response.status(400).json({ error: "templateId gerekli", functionId });
+      return;
+    }
+
+    const docRef = mobileAppDb.collection("mealTemplates").doc(templateId);
+    const snap = await docRef.get();
+    if (!snap.exists) {
+      response.status(404).json({ error: "Şablon bulunamadı", functionId });
+      return;
+    }
+    const existing = snap.data() || {};
+    if (existing.dietitianId !== dietitianId) {
+      response.status(403).json({ error: "Bu şablona erişim yetkiniz yok", functionId });
+      return;
+    }
+
+    await docRef.delete();
+    response.status(200).json({ success: true, functionId });
+  } catch (error: any) {
+    console.error(`[${functionId}] deleteMealTemplate hata:`, error);
     if (!response.headersSent) {
       response.status(500).json({ error: error.message || "Sunucu hatası", functionId });
     }
