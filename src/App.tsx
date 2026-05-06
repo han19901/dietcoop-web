@@ -40,6 +40,7 @@ const TesekkurKartlari = lazy(() => import('./pages/TesekkurKartlari'));
 const Ilanlar = lazy(() => import('./pages/Ilanlar'));
 const Basvurular = lazy(() => import('./pages/Basvurular'));
 const ManuelKayit = lazy(() => import('./pages/ManuelKayit'));
+const HesapSilmeIstekleri = lazy(() => import('./pages/HesapSilmeIstekleri'));
 
 // Diyetisyen pages - lazy load
 const DiyetisyenDashboard = lazy(() => import('./pages/diyetisyen/DiyetisyenDashboard'));
@@ -285,6 +286,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <ManuelKayit />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/hesap-silme-istekleri"
+        element={
+          <ProtectedRoute>
+            <HesapSilmeIstekleri />
           </ProtectedRoute>
         }
       />

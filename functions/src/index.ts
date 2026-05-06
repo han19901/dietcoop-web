@@ -2181,3 +2181,535 @@ export const deleteMealTemplate = corsHandler(async (
     }
   }
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// HESAP SİLME — Admin Onaylı Akış
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Akış:
+//  1) Mobil tarafta requestAccountDeletion → status="awaiting_admin_approval"
+//  2) Admin web panelinden onaylar → processAccountDeletion (bu dosya)
+//  3) Admin reddederse → rejectAccountDeletion (bu dosya)
+//
+// Otomatik 24h silme YOK. Eski client-side checkAndProcessDeletions de
+// kaldırıldı. Tüm silme akışı admin onayından geçer.
+
+/**
+ * Authorization: Bearer <web id token> doğrula ve admin yetkisini kontrol et.
+ * Admin değilse {error, status} döner.
+ */
+async function authenticateAdmin(
+  request: express.Request
+): Promise<{ uid: string; adminData: any } | { error: string; status: number }> {
+  const authHeader = request.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return { error: "Authorization bearer token eksik", status: 401 };
+  }
+  const idToken = authHeader.substring("Bearer ".length);
+
+  let decoded: admin.auth.DecodedIdToken;
+  try {
+    decoded = await admin.auth().verifyIdToken(idToken);
+  } catch (err: any) {
+    return { error: "Geçersiz veya süresi dolmuş token", status: 401 };
+  }
+
+  const adminSnap = await webPanelDb.collection("adminler").doc(decoded.uid).get();
+  if (!adminSnap.exists) {
+    return { error: "Bu işlem için admin yetkisi gerekli", status: 403 };
+  }
+  const adminData = adminSnap.data() || {};
+  const isActiveAdmin =
+    adminData.status === "approved" ||
+    adminData.status === "active" ||
+    adminData.aktif === true ||
+    adminData.aktif === "true";
+  const roleValue = (adminData.role || adminData.rol || "").toString();
+  if (!isActiveAdmin || (roleValue !== "admin" && roleValue !== "superAdmin")) {
+    return { error: "Yetersiz yetki", status: 403 };
+  }
+
+  return { uid: decoded.uid, adminData };
+}
+
+/**
+ * Admin için bekleyen / işlenmiş hesap silme isteklerini listele.
+ * Query params:
+ *  - status: "awaiting_admin_approval" | "approved" | "rejected" | "completed" | "all" (default: awaiting_admin_approval)
+ *  - limit: 1-200 (default: 50)
+ */
+export const listAccountDeletionRequests = corsHandler(async (request: express.Request, response: express.Response) => {
+  const functionId = `listAccountDeletionRequests_${Date.now()}`;
+  try {
+    if (request.method !== "GET" && request.method !== "POST") {
+      response.status(405).json({ error: "Yalnızca GET/POST desteklenir", functionId });
+      return;
+    }
+
+    const auth = await authenticateAdmin(request);
+    if ("error" in auth) {
+      response.status(auth.status).json({ error: auth.error, functionId });
+      return;
+    }
+
+    const params = request.method === "GET" ? request.query : (request.body || {});
+    const requestedStatus = (params.status || "awaiting_admin_approval").toString();
+    const rawLimit = parseInt((params.limit || "50").toString(), 10);
+    const limit = Math.min(Math.max(isNaN(rawLimit) ? 50 : rawLimit, 1), 200);
+
+    let query: admin.firestore.Query = mobileAppDb.collection("deletionRequests");
+    if (requestedStatus !== "all") {
+      query = query.where("status", "==", requestedStatus);
+    }
+    query = query.orderBy("requestedAt", "desc").limit(limit);
+
+    const snap = await query.get();
+    const items = snap.docs.map((doc) => {
+      const d = doc.data();
+      return {
+        id: doc.id,
+        userId: d.userId,
+        userEmail: d.userEmail || "",
+        userName: d.userName || "",
+        userSurname: d.userSurname || "",
+        userPhone: d.userPhone || "",
+        userRole: d.userRole,
+        status: d.status,
+        requestedAt: d.requestedAt?.toDate?.()?.toISOString() || null,
+        reviewedAt: d.reviewedAt?.toDate?.()?.toISOString() || null,
+        completedAt: d.completedAt?.toDate?.()?.toISOString() || null,
+        cancelledAt: d.cancelledAt?.toDate?.()?.toISOString() || null,
+        rejectedAt: d.rejectedAt?.toDate?.()?.toISOString() || null,
+        rejectionReason: d.rejectionReason || null,
+        reviewedByAdminId: d.reviewedByAdminId || null,
+      };
+    });
+
+    response.status(200).json({ items, count: items.length, functionId });
+  } catch (error: any) {
+    console.error(`[${functionId}] listAccountDeletionRequests hata:`, error);
+    if (!response.headersSent) {
+      response.status(500).json({ error: error.message || "Sunucu hatası", functionId });
+    }
+  }
+});
+
+/**
+ * Admin onayı sonrası hesap silme işlemini yürüt.
+ *
+ * Body: { requestId: string }
+ *
+ * Yaptıkları:
+ *  - mobileAppDb tarafında ilgili kullanıcının verilerini siler/anonimleştirir
+ *    (rol bazlı: dietitian → hard delete, client → soft delete; mevcut akışla aynı)
+ *  - webPanelDb tarafında diyetisyenler/{uid} dokümanını "deleted" olarak işaretler
+ *    (sonsuz sync döngüsünü engeller)
+ *  - Mobile Auth kaydını siler
+ *  - deletionRequests dokümanını status: "completed" olarak işaretler
+ *  - deletedAccounts koleksiyonuna log düşer
+ */
+export const processAccountDeletion = corsHandler(async (request: express.Request, response: express.Response) => {
+  const functionId = `processAccountDeletion_${Date.now()}`;
+  try {
+    if (request.method !== "POST") {
+      response.status(405).json({ error: "Yalnızca POST desteklenir", functionId });
+      return;
+    }
+
+    const auth = await authenticateAdmin(request);
+    if ("error" in auth) {
+      response.status(auth.status).json({ error: auth.error, functionId });
+      return;
+    }
+
+    const body = (typeof request.body === "string" ? JSON.parse(request.body) : request.body) || {};
+    const requestId: string = (body.requestId || "").toString().trim();
+    if (!requestId) {
+      response.status(400).json({ error: "requestId gerekli", functionId });
+      return;
+    }
+
+    const requestRef = mobileAppDb.collection("deletionRequests").doc(requestId);
+    const requestSnap = await requestRef.get();
+    if (!requestSnap.exists) {
+      response.status(404).json({ error: "Silme isteği bulunamadı", functionId });
+      return;
+    }
+
+    const reqData = requestSnap.data() || {};
+    if (reqData.status !== "awaiting_admin_approval" && reqData.status !== "pending") {
+      response.status(409).json({
+        error: `Bu istek artık onaylanamaz (mevcut durum: ${reqData.status})`,
+        functionId,
+      });
+      return;
+    }
+
+    const userId: string = reqData.userId;
+    const userRole: string = reqData.userRole;
+
+    if (!userId || !userRole) {
+      response.status(400).json({ error: "İstek verisi eksik (userId/userRole)", functionId });
+      return;
+    }
+
+    // Mevcut kullanıcı snapshot'ını al (silmeden önce log için)
+    const userSnap = await mobileAppDb.collection("users").doc(userId).get();
+    const userData = userSnap.exists ? userSnap.data() || {} : {};
+
+    // ─── Onaylama kaydı ───
+    await requestRef.update({
+      status: "approved",
+      reviewedAt: admin.firestore.FieldValue.serverTimestamp(),
+      reviewedByAdminId: auth.uid,
+    });
+
+    // ─── Silme işlemi ───
+    if (userRole === "dietitian") {
+      await deleteDietitianAccountServer(userId, functionId);
+    } else if (userRole === "client") {
+      await deleteClientAccountServer(userId, functionId);
+    } else if (userRole === "admin") {
+      // Admin hesabı için şimdilik sadece users dokümanını işaretle
+      await mobileAppDb.collection("users").doc(userId).set({
+        status: "deleted",
+        deletedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+
+    // ─── Auth silme (mobile Firebase) ───
+    try {
+      await admin.app("mobileApp").auth().deleteUser(userId);
+      console.log(`[${functionId}] ✅ Mobile Auth kullanıcısı silindi: ${userId}`);
+    } catch (authErr: any) {
+      if (authErr.code !== "auth/user-not-found") {
+        console.warn(`[${functionId}] ⚠️ Mobile Auth silinemedi:`, authErr.message);
+      }
+    }
+
+    // ─── deletedAccounts log ───
+    try {
+      await mobileAppDb.collection("deletedAccounts").add({
+        userId,
+        email: userData.email || reqData.userEmail || "",
+        phone: userData.phone || reqData.userPhone || "",
+        name: userData.name || reqData.userName || "",
+        surname: userData.surname || reqData.userSurname || "",
+        fullName: `${userData.name || reqData.userName || ""} ${userData.surname || reqData.userSurname || ""}`.trim(),
+        role: userRole,
+        registrationDate: userData.createdAt || null,
+        deletionDate: admin.firestore.FieldValue.serverTimestamp(),
+        approvedByAdminId: auth.uid,
+        deletionRequestId: requestId,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (logErr: any) {
+      console.warn(`[${functionId}] ⚠️ deletedAccounts log yazılamadı:`, logErr.message);
+    }
+
+    // ─── İsteği completed olarak işaretle ───
+    await requestRef.update({
+      status: "completed",
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    console.log(`[${functionId}] ✅ Silme tamamlandı - userId: ${userId}, role: ${userRole}`);
+    response.status(200).json({
+      success: true,
+      message: "Hesap silindi",
+      userId,
+      functionId,
+    });
+  } catch (error: any) {
+    console.error(`[${functionId}] processAccountDeletion hata:`, error);
+    if (!response.headersSent) {
+      response.status(500).json({ error: error.message || "Sunucu hatası", functionId });
+    }
+  }
+});
+
+/**
+ * Admin reddi sonrası hesap silme isteğini iptal et (kullanıcı silinmez).
+ *
+ * Body: { requestId: string, reason?: string }
+ */
+export const rejectAccountDeletion = corsHandler(async (request: express.Request, response: express.Response) => {
+  const functionId = `rejectAccountDeletion_${Date.now()}`;
+  try {
+    if (request.method !== "POST") {
+      response.status(405).json({ error: "Yalnızca POST desteklenir", functionId });
+      return;
+    }
+
+    const auth = await authenticateAdmin(request);
+    if ("error" in auth) {
+      response.status(auth.status).json({ error: auth.error, functionId });
+      return;
+    }
+
+    const body = (typeof request.body === "string" ? JSON.parse(request.body) : request.body) || {};
+    const requestId: string = (body.requestId || "").toString().trim();
+    const reason: string = (body.reason || "").toString().trim();
+    if (!requestId) {
+      response.status(400).json({ error: "requestId gerekli", functionId });
+      return;
+    }
+
+    const requestRef = mobileAppDb.collection("deletionRequests").doc(requestId);
+    const requestSnap = await requestRef.get();
+    if (!requestSnap.exists) {
+      response.status(404).json({ error: "Silme isteği bulunamadı", functionId });
+      return;
+    }
+    const reqData = requestSnap.data() || {};
+    if (reqData.status !== "awaiting_admin_approval" && reqData.status !== "pending") {
+      response.status(409).json({
+        error: `Bu istek artık reddedilemez (mevcut durum: ${reqData.status})`,
+        functionId,
+      });
+      return;
+    }
+
+    await requestRef.update({
+      status: "rejected",
+      rejectedAt: admin.firestore.FieldValue.serverTimestamp(),
+      rejectionReason: reason || null,
+      reviewedByAdminId: auth.uid,
+    });
+
+    // Kullanıcının users dokümanındaki ayna durumu temizle
+    try {
+      await mobileAppDb.collection("users").doc(reqData.userId).update({
+        "deletionRequest.status": "rejected",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (userErr: any) {
+      console.warn(`[${functionId}] ⚠️ users.deletionRequest.status güncellenemedi:`, userErr.message);
+    }
+
+    console.log(`[${functionId}] ✅ Silme isteği reddedildi - requestId: ${requestId}`);
+    response.status(200).json({ success: true, functionId });
+  } catch (error: any) {
+    console.error(`[${functionId}] rejectAccountDeletion hata:`, error);
+    if (!response.headersSent) {
+      response.status(500).json({ error: error.message || "Sunucu hatası", functionId });
+    }
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Server-side silme yardımcıları (mobile client'taki AccountDeletionService'in
+// admin SDK karşılığı). Loop riski olmaması için web doc'unu da deleted
+// olarak işaretler.
+// ─────────────────────────────────────────────────────────────────────────
+
+async function deleteDietitianAccountServer(dietitianId: string, functionId: string): Promise<void> {
+  console.log(`[${functionId}] [deleteDietitianAccountServer] ${dietitianId} siliniyor (hard delete)`);
+
+  // 1) Sonuç kartlarından diyetisyen erişimini kapat (anonimleştir)
+  try {
+    const resultsSnap = await mobileAppDb.collection("dietPlanResults")
+      .where("dietitianId", "==", dietitianId)
+      .get();
+    if (!resultsSnap.empty) {
+      const stableDeletedDietitianId = `deleted_dietitian_${dietitianId}`;
+      const batch = mobileAppDb.batch();
+      resultsSnap.docs.forEach((doc) => {
+        batch.update(doc.ref, {
+          dietitianId: stableDeletedDietitianId,
+          dietitianName: "Silinmiş Diyetisyen",
+          dietitianEmail: `${stableDeletedDietitianId}@deleted.local`,
+          dietitianAccessRevoked: true,
+          originalDietitianId: dietitianId,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+      await batch.commit();
+    }
+  } catch (e: any) {
+    console.warn(`[${functionId}] dietPlanResults anonimleştirme hatası:`, e.message);
+  }
+
+  // 2) Diyet planlarını sil
+  await deleteCollectionByQuery(mobileAppDb.collection("dietPlans").where("dietitianId", "==", dietitianId), functionId, "dietPlans");
+
+  // 3) Eşleşmeleri sil
+  await deleteCollectionByQuery(mobileAppDb.collection("matches").where("dietitianId", "==", dietitianId), functionId, "matches");
+
+  // 4) Bildirimleri sil
+  await deleteCollectionByQuery(mobileAppDb.collection("notifications").where("userId", "==", dietitianId), functionId, "notifications");
+
+  // 5) Meal template'leri sil
+  await deleteCollectionByQuery(mobileAppDb.collection("mealTemplates").where("dietitianId", "==", dietitianId), functionId, "mealTemplates");
+
+  // 6) WEB doc'unu deleted olarak işaretle (sync döngüsü kapatıcı)
+  //    Bu, mobile users delete edildikten sonra web'in mobile'ı resurrect
+  //    etmesini engellemek için KRİTİK.
+  try {
+    await webPanelDb.collection("diyetisyenler").doc(dietitianId).set({
+      isDeleted: true,
+      deletedAt: admin.firestore.FieldValue.serverTimestamp(),
+      email: `deleted_dietitian_${dietitianId}@deleted.local`,
+      adSoyad: "Silinmiş Diyetisyen",
+      telefon: "",
+      sonGuncelleme: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    console.log(`[${functionId}] ✅ Web diyetisyen doc deleted olarak işaretlendi: ${dietitianId}`);
+  } catch (webErr: any) {
+    console.warn(`[${functionId}] ⚠️ Web doc işaretlenemedi:`, webErr.message);
+  }
+
+  // 7) Mobile users dokümanını sil (HARD DELETE)
+  try {
+    await mobileAppDb.collection("users").doc(dietitianId).delete();
+    console.log(`[${functionId}] ✅ Mobile users dokümanı silindi: ${dietitianId}`);
+  } catch (e: any) {
+    console.warn(`[${functionId}] ⚠️ Mobile users silinemedi:`, e.message);
+  }
+
+  // 8) Orphaned result cards (hem diyetisyen hem danışan silinmişse)
+  try {
+    const orphanedSnap = await mobileAppDb.collection("dietPlanResults")
+      .where("dietitianAccessRevoked", "==", true)
+      .where("clientAccessRevoked", "==", true)
+      .get();
+    if (!orphanedSnap.empty) {
+      const batch = mobileAppDb.batch();
+      orphanedSnap.docs.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+      console.log(`[${functionId}] ${orphanedSnap.size} orphan sonuç kartı silindi`);
+    }
+  } catch (e: any) {
+    console.warn(`[${functionId}] orphan kartlar silinemedi:`, e.message);
+  }
+}
+
+async function deleteClientAccountServer(clientId: string, functionId: string): Promise<void> {
+  console.log(`[${functionId}] [deleteClientAccountServer] ${clientId} siliniyor (soft delete)`);
+
+  // 1) Sonuç kartlarından danışan erişimini kapat
+  try {
+    const resultsSnap = await mobileAppDb.collection("dietPlanResults")
+      .where("clientId", "==", clientId)
+      .get();
+    if (!resultsSnap.empty) {
+      const stableDeletedClientId = `deleted_client_${clientId}`;
+      const batch = mobileAppDb.batch();
+      resultsSnap.docs.forEach((doc) => {
+        batch.update(doc.ref, {
+          clientId: stableDeletedClientId,
+          clientName: "Silinmiş Danışan",
+          clientEmail: `${stableDeletedClientId}@deleted.local`,
+          clientAccessRevoked: true,
+          originalClientId: clientId,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+      await batch.commit();
+    }
+  } catch (e: any) {
+    console.warn(`[${functionId}] dietPlanResults anonimleştirme hatası:`, e.message);
+  }
+
+  // 2) Diyet planlarını soft delete olarak işaretle
+  try {
+    const plansSnap = await mobileAppDb.collection("dietPlans")
+      .where("clientId", "==", clientId)
+      .get();
+    if (!plansSnap.empty) {
+      const batch = mobileAppDb.batch();
+      plansSnap.docs.forEach((doc) => {
+        batch.update(doc.ref, {
+          isDeleted: true,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+      await batch.commit();
+    }
+  } catch (e: any) {
+    console.warn(`[${functionId}] dietPlans soft delete hatası:`, e.message);
+  }
+
+  // 3) Eşleşmeleri sonlandır
+  try {
+    const matchesSnap = await mobileAppDb.collection("matches")
+      .where("clientId", "==", clientId)
+      .get();
+    if (!matchesSnap.empty) {
+      const batch = mobileAppDb.batch();
+      matchesSnap.docs.forEach((doc) => {
+        batch.update(doc.ref, {
+          status: "ended",
+          endedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+      await batch.commit();
+    }
+  } catch (e: any) {
+    console.warn(`[${functionId}] matches sonlandırma hatası:`, e.message);
+  }
+
+  // 4) users dokümanını soft delete (silmek yerine anonimleştir)
+  try {
+    const stableDeletedEmail = `deleted_client_${clientId}@deleted.local`;
+    await mobileAppDb.collection("users").doc(clientId).set({
+      status: "deleted",
+      deletedAt: admin.firestore.FieldValue.serverTimestamp(),
+      email: stableDeletedEmail,
+      name: "Silinmiş Kullanıcı",
+      surname: "",
+      profileImage: null,
+      phone: null,
+      address: null,
+      addressLine1: null,
+      addressLine2: null,
+      city: null,
+      district: null,
+      postalCode: null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (e: any) {
+    console.warn(`[${functionId}] users soft delete hatası:`, e.message);
+  }
+
+  // 5) Orphaned result cards
+  try {
+    const orphanedSnap = await mobileAppDb.collection("dietPlanResults")
+      .where("dietitianAccessRevoked", "==", true)
+      .where("clientAccessRevoked", "==", true)
+      .get();
+    if (!orphanedSnap.empty) {
+      const batch = mobileAppDb.batch();
+      orphanedSnap.docs.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+    }
+  } catch (e: any) {
+    console.warn(`[${functionId}] orphan kartlar silinemedi:`, e.message);
+  }
+}
+
+/**
+ * Sorgu sonucundaki tüm dokümanları batch'lerle (max 500/batch) sil.
+ */
+async function deleteCollectionByQuery(
+  query: admin.firestore.Query,
+  functionId: string,
+  label: string
+): Promise<void> {
+  try {
+    const snap = await query.get();
+    if (snap.empty) return;
+    const batchSize = 450;
+    let processed = 0;
+    while (processed < snap.docs.length) {
+      const batch = mobileAppDb.batch();
+      const slice = snap.docs.slice(processed, processed + batchSize);
+      slice.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+      processed += slice.length;
+    }
+    console.log(`[${functionId}] ${snap.size} ${label} dokümanı silindi`);
+  } catch (e: any) {
+    console.warn(`[${functionId}] ${label} silinemedi:`, e.message);
+  }
+}
