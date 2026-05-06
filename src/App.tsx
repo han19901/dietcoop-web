@@ -48,6 +48,8 @@ const DiyetisyenOdeme = lazy(() => import('./pages/diyetisyen/DiyetisyenOdeme'))
 const DiyetisyenFaturalar = lazy(() => import('./pages/diyetisyen/DiyetisyenFaturalar'));
 const DiyetisyenEvraklar = lazy(() => import('./pages/diyetisyen/DiyetisyenEvraklar'));
 const DiyetisyenMesajlar = lazy(() => import('./pages/diyetisyen/DiyetisyenMesajlar'));
+const DiyetisyenSablonlar = lazy(() => import('./pages/diyetisyen/DiyetisyenSablonlar'));
+const DiyetisyenSablonOlustur = lazy(() => import('./pages/diyetisyen/DiyetisyenSablonOlustur'));
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -332,6 +334,30 @@ function AppRoutes() {
         element={
           <DiyetisyenProtectedRoute>
             <DiyetisyenMesajlar />
+          </DiyetisyenProtectedRoute>
+        }
+      />
+      <Route
+        path="/diyetisyen/sablonlar"
+        element={
+          <DiyetisyenProtectedRoute>
+            <DiyetisyenSablonlar />
+          </DiyetisyenProtectedRoute>
+        }
+      />
+      <Route
+        path="/diyetisyen/sablonlar/yeni"
+        element={
+          <DiyetisyenProtectedRoute>
+            <DiyetisyenSablonOlustur />
+          </DiyetisyenProtectedRoute>
+        }
+      />
+      <Route
+        path="/diyetisyen/sablonlar/:id"
+        element={
+          <DiyetisyenProtectedRoute>
+            <DiyetisyenSablonOlustur />
           </DiyetisyenProtectedRoute>
         }
       />
