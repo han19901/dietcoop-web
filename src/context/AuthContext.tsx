@@ -48,19 +48,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let isMounted = true;
-    
+
     const unsubscribe = authService.onAuthStateChanged(async (firebaseUser: User | null) => {
       if (!isMounted) return;
-      
+
       if (firebaseUser) {
         try {
           const userData = await authService.getCurrentUser();
-          
+
           if (!isMounted) return;
-          
+
           if (userData) {
             setUser(userData);
-            
+
             // Rolüne göre yönlendir
             if (window.location.pathname === '/login' || window.location.pathname === '/admin/login') {
               if (userData.rol === 'superAdmin' || userData.rol === 'admin') {
@@ -85,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         setUser(null);
       }
-      
+
       setLoading(false);
     });
 

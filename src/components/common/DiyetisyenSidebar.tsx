@@ -1,12 +1,13 @@
 import { Link, useLocation } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  User, 
+import {
+  LayoutDashboard,
+  User,
   MessageSquare,
   FileText,
   Upload,
   Menu,
-  X
+  X,
+  BookOpen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState } from 'react';
@@ -14,6 +15,7 @@ import { useState } from 'react';
 const menuItems = [
   { path: '/diyetisyen/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { path: '/diyetisyen/profil', icon: User, label: 'Profil' },
+  { path: '/diyetisyen/sablonlar', icon: BookOpen, label: 'Şablonlar Kütüphanesi' },
   { path: '/diyetisyen/faturalar', icon: FileText, label: 'Faturalarım' },
   { path: '/diyetisyen/evraklar', icon: Upload, label: 'Evraklar' },
   { path: '/diyetisyen/mesajlar', icon: MessageSquare, label: 'Mesajlar' },
@@ -48,7 +50,10 @@ export default function DiyetisyenSidebar() {
             <nav className="p-4 space-y-2">
               {menuItems.map((item) => {
                 const Icon = item.icon;
-                const isActive = location.pathname === item.path;
+                const isActive =
+                  location.pathname === item.path ||
+                  (item.path !== '/diyetisyen/dashboard' &&
+                    location.pathname.startsWith(`${item.path}/`));
                 
                 return (
                   <Link

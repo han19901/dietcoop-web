@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { 
-  Users, 
-  CreditCard, 
+import {
+  Users,
+  CreditCard,
   AlertCircle,
   UserCheck,
   Clock
